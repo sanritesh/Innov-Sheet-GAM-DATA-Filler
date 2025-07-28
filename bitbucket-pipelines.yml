@@ -2,19 +2,15 @@ image: python:3.9
 
 definitions:
   steps:
-    - step: &setup-environment
-        name: Setup Environment
-        caches:
-          - pip
-        script:
-          - pip install -r requirements.txt
-          - echo "Environment setup complete"
-
     - step: &run-gam-script
         name: Run GAM Geo Fetch Script
         caches:
           - pip
         script:
+          # Install dependencies
+          - pip install -r requirements.txt
+          - echo "Dependencies installed successfully"
+          
           # Create service account JSON file if using environment variable
           - |
             if [ ! -z "$GOOGLE_SERVICE_ACCOUNT_JSON" ]; then
@@ -29,17 +25,14 @@ definitions:
 
 pipelines:
   default:
-    - step: *setup-environment
     - step: *run-gam-script
 
   branches:
     main:
-      - step: *setup-environment
       - step: *run-gam-script
 
   pull-requests:
     '**':
-      - step: *setup-environment
       - step: *run-gam-script
 
   custom:
