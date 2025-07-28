@@ -1,3 +1,5 @@
+import os
+import json
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from googleads import ad_manager
@@ -8,18 +10,47 @@ import re
 
 # Google Sheets setup
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
-SHEET_ID = '1Qx1GhhGUGM_3FWLDM04ygyAezUO2Zf6C4SlhG1h7IQA'
+SHEET_ID = os.getenv('GOOGLE_SHEET_ID', '1Qx1GhhGUGM_3FWLDM04ygyAezUO2Zf6C4SlhG1h7IQA')
 
 # GAM setup
-GAM_YAMLS = ['googleadsN.yaml', 'googleads.yaml']
+GAM_YAMLS = os.getenv('GAM_YAML_FILES', 'googleadsN.yaml,googleads.yaml').split(',')
 
 # Exclusion list for Package Name (case-insensitive)
-EXCLUDE_SUBSTRINGS = [
+DEFAULT_EXCLUDE_SUBSTRINGS = [
     'ETCIO', 'ETBRANDEQUITY', 'ETHR', 'ETCFO', 'ETAUTO', 'ETRETAIL', 'ETHEALTH', 'ETTELECOM', 'ETENERGY',
     'ETREALESTATE', 'ETIT', 'ETITSECURITY', 'ETBFSI', 'ETGOVERNMENT', 'ETHOSPITALITY', 'ETLEGAL',
     'ETTRAVELWORLD', 'ETINFRA', 'ETB2B', 'ETCIOSEA', 'ETHRSEA', 'ETHREMEA', 'ETEduCation', 'ETEnergyWorldMEA',
     'ETManufacturing', 'ETPharma', 'ETGCC', 'ETEnterpriseAI', 'ETREALTY', 'ET ENERGY', 'ET TRAVEL', 'ET REALTY'
 ]
+EXCLUDE_SUBSTRINGS = os.getenv('EXCLUDE_SUBSTRINGS', ','.join(DEFAULT_EXCLUDE_SUBSTRINGS)).split(',')
+
+# Exclude platforms
+EXCLUDE_PLATFORMS = os.getenv('EXCLUDE_PLATFORMS', 'App').split(',')
+
+def setup_google_sheets():
+    """Setup Google Sheets authentication using environment variables or fallback to file"""
+    try:
+        # Try to use service account JSON from environment
+        service_account_json = os.getenv('GOOGLE_SERVICE_ACCOUNT_JSON')
+        if service_account_json:
+            # Parse JSON and create credentials
+            service_account_info = json.loads(service_account_json)
+            credentials = ServiceAccountCredentials.from_json_keyfile_dict(
+                service_account_info, SCOPES
+            )
+            print("Using service account JSON from environment variable")
+        else:
+            # Fallback to file-based authentication
+            credentials = ServiceAccountCredentials.from_json_keyfile_name(
+                'service-account.json', SCOPES
+            )
+            print("Using service account JSON from file")
+        
+        gc = gspread.authorize(credentials)
+        return gc
+    except Exception as e:
+        print(f"Error setting up Google Sheets: {e}")
+        return None
 
 def get_date_sheets(sh):
     """Get all sheets that follow any date pattern (today and future only)"""
@@ -164,10 +195,12 @@ def find_sheets_to_update(sh):
     
     return sheets_to_update
 
-# Authenticate Google Sheets
-credentials = ServiceAccountCredentials.from_json_keyfile_name(
-    '/Users/Ritesh.Sanjay/DailyInnovProcesses/til-adquality-project-71546b9ff5d8.json', SCOPES)
-gc = gspread.authorize(credentials)
+# Authenticate Google Sheets using environment variables or fallback
+gc = setup_google_sheets()
+if not gc:
+    print("[ERROR] Failed to setup Google Sheets authentication")
+    exit(1)
+
 sh = gc.open_by_key(SHEET_ID)
 
 # Find sheets that need updating
