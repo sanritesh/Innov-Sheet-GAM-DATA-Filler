@@ -1,0 +1,682 @@
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+from googleads import ad_manager
+from datetime import datetime, timedelta
+import pytz
+import time
+import re
+
+# Google Sheets setup
+SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
+SHEET_ID = '1Qx1GhhGUGM_3FWLDM04ygyAezUO2Zf6C4SlhG1h7IQA'
+
+# GAM setup
+GAM_YAMLS = ['googleadsN.yaml', 'googleads.yaml']
+
+# Exclusion list for Package Name (case-insensitive)
+EXCLUDE_SUBSTRINGS = [
+    'ETCIO', 'ETBRANDEQUITY', 'ETHR', 'ETCFO', 'ETAUTO', 'ETRETAIL', 'ETHEALTH', 'ETTELECOM', 'ETENERGY',
+    'ETREALESTATE', 'ETIT', 'ETITSECURITY', 'ETBFSI', 'ETGOVERNMENT', 'ETHOSPITALITY', 'ETLEGAL',
+    'ETTRAVELWORLD', 'ETINFRA', 'ETB2B', 'ETCIOSEA', 'ETHRSEA', 'ETHREMEA', 'ETEduCation', 'ETEnergyWorldMEA',
+    'ETManufacturing', 'ETPharma', 'ETGCC', 'ETEnterpriseAI', 'ETREALTY', 'ET ENERGY', 'ET TRAVEL', 'ET REALTY'
+]
+
+def get_date_sheets(sh):
+    """Get all sheets that follow any date pattern (today and future only)"""
+    all_sheets = sh.worksheets()
+    date_sheets = []
+    today = datetime.now()
+    
+    print(f"[DEBUG] Found {len(all_sheets)} total sheets")
+    print(f"[DEBUG] Sheet names: {[sheet.title for sheet in all_sheets]}")
+    
+    # Common date patterns to try
+    date_patterns = [
+        "%d %B",       # "26 July" (with leading zero)
+        "%B %d",       # "July 26" (with leading zero)
+        "%d/%m",       # "26/07" (with leading zero)
+        "%m/%d",       # "07/26" (with leading zero)
+        "%d-%m",       # "26-07" (with leading zero)
+        "%m-%d",       # "07-26" (with leading zero)
+        "%d.%m",       # "26.07" (with leading zero)
+        "%m.%d",       # "07.26" (with leading zero)
+        "%d %B %Y",    # "26 July 2025" (with leading zero)
+        "%B %d %Y",    # "July 26 2025" (with leading zero)
+        "%d/%m/%Y",    # "26/07/2025" (with leading zero)
+        "%m/%d/%Y",    # "07/26/2025" (with leading zero)
+        "%d-%m-%Y",    # "26-07-2025" (with leading zero)
+        "%m-%d-%Y",    # "07-26-2025" (with leading zero)
+        "%d.%m.%Y",    # "26.07.2025" (with leading zero)
+        "%m.%d.%Y",    # "07.26.2025" (with leading zero)
+    ]
+    
+    # Try to parse with flexible day format (handle both single and double digit days)
+    def try_parse_date(sheet_title):
+        # First try the standard patterns
+        for pattern in date_patterns:
+            try:
+                date_obj = datetime.strptime(sheet_title, pattern)
+                if date_obj.year >= 2020:
+                    return date_obj
+            except ValueError:
+                continue
+        
+        # If standard patterns fail, try to handle single-digit days manually
+        # Look for patterns like "1 July", "2 July", etc.
+        import re
+        match = re.match(r'^(\d{1,2})\s+([A-Za-z]+)$', sheet_title)
+        if match:
+            day_str, month_str = match.groups()
+            try:
+                # Try to parse with the day as-is
+                date_str = f"{day_str} {month_str} 2025"
+                date_obj = datetime.strptime(date_str, "%d %B %Y")
+                if date_obj.year >= 2020:
+                    return date_obj
+            except ValueError:
+                pass
+        
+        return None
+    
+    for sheet in all_sheets:
+        sheet_title = sheet.title.strip()
+        print(f"[DEBUG] Checking sheet: '{sheet_title}'")
+        
+        # Skip if sheet title is too short or doesn't contain numbers
+        if len(sheet_title) < 3 or not re.search(r'\d', sheet_title):
+            print(f"[DEBUG]   Skipping '{sheet_title}' - too short or no numbers")
+            continue
+            
+        # Try to parse the date
+        date_obj = try_parse_date(sheet_title)
+        if date_obj:
+            # Only include today and future dates
+            if date_obj.date() >= today.date():
+                date_sheets.append((sheet, date_obj))
+                print(f"[DEBUG]   Matched '{sheet_title}' -> {date_obj} (future/today)")
+            else:
+                print(f"[DEBUG]   Skipping '{sheet_title}' -> {date_obj} (past date)")
+        else:
+            print(f"[DEBUG]   No pattern matched for '{sheet_title}'")
+    
+    # Sort by date (newest first)
+    date_sheets.sort(key=lambda x: x[1], reverse=True)
+    print(f"[DEBUG] Found {len(date_sheets)} date-based sheets (today and future)")
+    return date_sheets
+
+def needs_updating(ws):
+    """Check if a sheet needs updating (geo columns are empty)"""
+    try:
+        # Get all values from the sheet
+        all_values = ws.get_all_values()
+        if not all_values or len(all_values) < 2:  # No data or only header
+            return True
+        
+        # Find our target columns
+        header = all_values[0]
+        geo_included_idx = None
+        geo_excluded_idx = None
+        
+        for i, col in enumerate(header):
+            if col == 'geo included':
+                geo_included_idx = i
+            elif col == 'geo excluded':
+                geo_excluded_idx = i
+        
+        # If our columns don't exist, sheet needs updating
+        if geo_included_idx is None or geo_excluded_idx is None:
+            return True
+        
+        # Check if any rows have data in our columns
+        for row in all_values[1:]:  # Skip header
+            if len(row) > max(geo_included_idx, geo_excluded_idx):
+                if (row[geo_included_idx] and row[geo_included_idx].strip()) or \
+                   (row[geo_excluded_idx] and row[geo_excluded_idx].strip()):
+                    return False  # Found data, sheet is already updated
+        
+        return True  # No data found in our columns
+        
+    except Exception as e:
+        print(f"[ERROR] Checking if sheet needs updating: {e}")
+        return True  # Assume it needs updating if we can't check
+
+def find_sheets_to_update(sh):
+    """Find sheets that need updating from the last 5 date-based sheets"""
+    date_sheets = get_date_sheets(sh)
+    
+    if not date_sheets:
+        print("[WARNING] No date-based sheets found")
+        return []
+    
+    print(f"[INFO] Found {len(date_sheets)} date-based sheets")
+    
+    # Check the last 5 sheets (or all if less than 5)
+    sheets_to_check = date_sheets[:5]
+    sheets_to_update = []
+    
+    for sheet, date in sheets_to_check:
+        print(f"[INFO] Checking sheet: {sheet.title} ({date.strftime('%B %-d')})")
+        if needs_updating(sheet):
+            print(f"[INFO] Sheet {sheet.title} needs updating")
+            sheets_to_update.append(sheet)
+        else:
+            print(f"[INFO] Sheet {sheet.title} already updated")
+    
+    return sheets_to_update
+
+# Authenticate Google Sheets
+credentials = ServiceAccountCredentials.from_json_keyfile_name(
+    '/Users/Ritesh.Sanjay/DailyInnovProcesses/til-adquality-project-71546b9ff5d8.json', SCOPES)
+gc = gspread.authorize(credentials)
+sh = gc.open_by_key(SHEET_ID)
+
+# Find sheets that need updating
+sheets_to_update = find_sheets_to_update(sh)
+
+if not sheets_to_update:
+    print("[INFO] All sheets are already updated. No work needed.")
+    exit(0)
+
+print(f"[INFO] Found {len(sheets_to_update)} sheets that need updating")
+
+# Authenticate both GAM clients
+clients = [ad_manager.AdManagerClient.LoadFromStorage(yaml) for yaml in GAM_YAMLS]
+
+tz = pytz.timezone('Asia/Kolkata')
+now = datetime.now(tz)
+
+# Helper to extract geo info from a line item
+def extract_geo(line_item):
+    geo = {'included': [], 'excluded': []}
+    try:
+        if hasattr(line_item, 'targeting') and hasattr(line_item.targeting, 'geoTargeting'):
+            geoTargeting = line_item.targeting.geoTargeting
+            if hasattr(geoTargeting, 'targetedLocations'):
+                for loc in geoTargeting.targetedLocations:
+                    geo['included'].append({
+                        'id': str(getattr(loc, 'id', '')),
+                        'name': getattr(loc, 'displayName', ''),
+                        'type': getattr(loc, 'type', '')
+                    })
+            if hasattr(geoTargeting, 'excludedLocations'):
+                for loc in geoTargeting.excludedLocations:
+                    geo['excluded'].append({
+                        'id': str(getattr(loc, 'id', '')),
+                        'name': getattr(loc, 'displayName', ''),
+                        'type': getattr(loc, 'type', '')
+                    })
+    except Exception as e:
+        print(f"[ERROR] Extracting geo: {e}")
+    return geo
+
+# Cache to store results for Expresso ID + Campaign Name combinations
+result_cache = {}
+
+# For each campaign name, find matching active sponsorship order/line-item and fetch geo
+def is_active_sponsorship(li):
+    try:
+        if getattr(li, 'lineItemType', '') != 'SPONSORSHIP':
+            return False
+        start = getattr(li, 'startDateTime', None)
+        end = getattr(li, 'endDateTime', None)
+        if not start or not end:
+            return False
+        
+        # Parse start date
+        start_date = getattr(start, 'date', None)
+        start_hour = getattr(start, 'hour', 0)
+        start_minute = getattr(start, 'minute', 0)
+        start_second = getattr(start, 'second', 0)
+        
+        if start_date:
+            start_year = getattr(start_date, 'year', 0)
+            start_month = getattr(start_date, 'month', 0)
+            start_day = getattr(start_date, 'day', 0)
+        else:
+            start_year = getattr(start, 'year', 0)
+            start_month = getattr(start, 'month', 0)
+            start_day = getattr(start, 'day', 0)
+        
+        # Parse end date
+        end_date = getattr(end, 'date', None)
+        end_hour = getattr(end, 'hour', 23)
+        end_minute = getattr(end, 'minute', 59)
+        end_second = getattr(end, 'second', 59)
+        
+        if end_date:
+            end_year = getattr(end_date, 'year', 0)
+            end_month = getattr(end_date, 'month', 0)
+            end_day = getattr(end_date, 'day', 0)
+        else:
+            end_year = getattr(end, 'year', 0)
+            end_month = getattr(end, 'month', 0)
+            end_day = getattr(end, 'day', 0)
+        
+        # Create datetime objects
+        start_dt = datetime(start_year, start_month, start_day, start_hour, start_minute, start_second, tzinfo=tz)
+        end_dt = datetime(end_year, end_month, end_day, end_hour, end_minute, end_second, tzinfo=tz)
+        
+        # Check if line item is active for current date
+        return start_dt <= now <= end_dt
+        
+    except Exception as e:
+        print(f"[ERROR] Checking active sponsorship: {e}")
+        return False
+
+def fetch_geo_for_search_string(search_string, clients):
+    all_included = []
+    all_excluded = []
+    order_info = {}
+    
+    for client in clients:
+        try:
+            print(f"[DEBUG] Trying client with network code: {client.network_code}")
+            
+            # First try to find orders containing the search string
+            order_service = client.GetService('OrderService', version='v202411')
+            print(f"[DEBUG] Using OrderService with v202411")
+            
+            statement = ad_manager.StatementBuilder().Where('name LIKE :search_string').WithBindVariable('search_string', f'%{search_string}%')
+            orders = order_service.getOrdersByStatement(statement.ToStatement())
+            
+            print(f"[DEBUG] Search for '{search_string}' returned {len(orders) if orders else 0} orders")
+            
+            if orders and len(orders) > 0:
+                try:
+                    print(f"[DEBUG] Orders structure: {type(orders)}")
+                    print(f"[DEBUG] Orders length: {len(orders)}")
+                    
+                    # For OrderPage objects, we need to access the results differently
+                    if hasattr(orders, 'results'):
+                        # Try to access the results attribute
+                        order_results = orders.results
+                        if order_results and len(order_results) > 0:
+                            first_order = order_results[0]
+                            print(f"[DEBUG] First order: {first_order}")
+                            print(f"[DEBUG] First order type: {type(first_order)}")
+                            
+                            if hasattr(first_order, 'name'):
+                                order_name = first_order.name
+                                order_id = first_order.id
+                            elif isinstance(first_order, dict):
+                                order_name = first_order.get('name', 'Unknown')
+                                order_id = first_order.get('id', 'Unknown')
+                            else:
+                                print(f"[DEBUG] Unknown order structure: {first_order}")
+                                continue
+                            
+                            print(f"[DEBUG] Found order: {order_name} (ID: {order_id})")
+                        else:
+                            print(f"[DEBUG] No results in OrderPage")
+                            continue
+                    else:
+                        print(f"[DEBUG] Orders object has no 'results' attribute: {orders}")
+                        continue
+                    
+                    # Get line items for this order
+                    line_item_service = client.GetService('LineItemService', version='v202411')
+                    
+                    statement = ad_manager.StatementBuilder().Where('orderId = :order_id').WithBindVariable('order_id', order_id)
+                    line_items = line_item_service.getLineItemsByStatement(statement.ToStatement())
+                    
+                    print(f"[DEBUG] Found {len(line_items) if line_items else 0} line items for order {order_id}")
+                    
+                except Exception as e:
+                    print(f"[DEBUG] Error accessing order details: {e}")
+                    print(f"[DEBUG] Full error: {type(e).__name__}: {str(e)}")
+                    continue
+                
+                if line_items and len(line_items) > 0:
+                    # Access the results array from LineItemPage
+                    if hasattr(line_items, 'results'):
+                        line_item_results = line_items.results
+                    else:
+                        line_item_results = line_items
+                    
+                    for li in line_item_results:
+                        try:
+                            if hasattr(li, 'name'):
+                                li_name = li.name
+                                li_type = li.lineItemType
+                            elif isinstance(li, dict):
+                                li_name = li.get('name', 'Unknown')
+                                li_type = li.get('lineItemType', 'Unknown')
+                            else:
+                                print(f"[DEBUG]   Unknown line item structure: {li}")
+                                continue
+                            
+                            print(f"[DEBUG]   Line item: {li_name}, type: {li_type}")
+                            
+                            # Check if line item is active and of type SPONSORSHIP
+                            if is_active_sponsorship(li):
+                                print(f"[DEBUG]     Line item is active and of type SPONSORSHIP")
+                                geo = extract_geo(li)
+                                all_included.extend(geo['included'])
+                                all_excluded.extend(geo['excluded'])
+                                
+                                # Get order info
+                                order_info = {
+                                    'order_id': order_id,
+                                    'trafficker_id': first_order.traffickerId if hasattr(first_order, 'traffickerId') else None,
+                                    'creator_id': first_order.creatorId if hasattr(first_order, 'creatorId') else None
+                                }
+                                
+                                # Get trafficker and creator names
+                                try:
+                                    user_service = client.GetService('UserService', version='v202411')
+                                    if order_info['trafficker_id']:
+                                        trafficker_statement = ad_manager.StatementBuilder().Where('id = :user_id').WithBindVariable('user_id', order_info['trafficker_id'])
+                                        trafficker_users = user_service.getUsersByStatement(trafficker_statement.ToStatement())
+                                        if trafficker_users and len(trafficker_users) > 0:
+                                            if hasattr(trafficker_users, 'results') and trafficker_users.results:
+                                                order_info['trafficker_name'] = trafficker_users.results[0].name
+                                    
+                                    if order_info['creator_id']:
+                                        creator_statement = ad_manager.StatementBuilder().Where('id = :user_id').WithBindVariable('user_id', order_info['creator_id'])
+                                        creator_users = user_service.getUsersByStatement(creator_statement.ToStatement())
+                                        if creator_users and len(creator_users) > 0:
+                                            if hasattr(creator_users, 'results') and creator_users.results:
+                                                order_info['creator_name'] = creator_users.results[0].name
+                                except Exception as e:
+                                    print(f"[ERROR] Getting user names: {e}")
+                                
+                                print(f"[DEBUG]     Geo included: {geo['included']}, Geo excluded: {geo['excluded']}")
+                                return all_included, all_excluded, order_info
+                            else:
+                                print(f"[DEBUG]     Line item is NOT active or not SPONSORSHIP")
+                        except Exception as e:
+                            print(f"[DEBUG] Error processing line item: {e}")
+                            continue
+            
+            # If no orders found, try direct line item search
+            print(f"[DEBUG] No orders found containing '{search_string}', trying direct line item search...")
+            line_item_service = client.GetService('LineItemService', version='v202411')
+            print(f"[DEBUG] Using LineItemService with v202411")
+            
+            statement = ad_manager.StatementBuilder().Where('name LIKE :search_string').WithBindVariable('search_string', f'%{search_string}%')
+            line_items = line_item_service.getLineItemsByStatement(statement.ToStatement())
+            
+            print(f"[DEBUG] Search for '{search_string}' returned {len(line_items) if line_items else 0} line items")
+            
+            if line_items and len(line_items) > 0:
+                # Access the results array from LineItemPage
+                if hasattr(line_items, 'results'):
+                    line_item_results = line_items.results
+                else:
+                    line_item_results = line_items
+                
+                for li in line_item_results:
+                    try:
+                        if hasattr(li, 'name'):
+                            li_name = li.name
+                            li_type = li.lineItemType
+                        elif isinstance(li, dict):
+                            li_name = li.get('name', 'Unknown')
+                            li_type = li.get('lineItemType', 'Unknown')
+                        else:
+                            print(f"[DEBUG]   Unknown line item structure: {li}")
+                            continue
+                        
+                        print(f"[DEBUG]   Line item: {li_name}, type: {li_type}")
+                        
+                        if is_active_sponsorship(li):
+                            print(f"[DEBUG]     Line item is active and of type SPONSORSHIP")
+                            geo = extract_geo(li)
+                            all_included.extend(geo['included'])
+                            all_excluded.extend(geo['excluded'])
+                            
+                            # Get order info for this line item
+                            order_id = li.orderId if hasattr(li, 'orderId') else None
+                            if order_id:
+                                order_statement = ad_manager.StatementBuilder().Where('id = :order_id').WithBindVariable('order_id', order_id)
+                                orders = order_service.getOrdersByStatement(order_statement.ToStatement())
+                                if orders and len(orders) > 0:
+                                    if hasattr(orders, 'results') and orders.results:
+                                        first_order = orders.results[0]
+                                        order_info = {
+                                            'order_id': first_order.id,
+                                            'trafficker_id': first_order.traffickerId if hasattr(first_order, 'traffickerId') else None,
+                                            'creator_id': first_order.creatorId if hasattr(first_order, 'creatorId') else None
+                                        }
+                                        
+                                        # Get trafficker and creator names
+                                        try:
+                                            user_service = client.GetService('UserService', version='v202411')
+                                            if order_info['trafficker_id']:
+                                                trafficker_statement = ad_manager.StatementBuilder().Where('id = :user_id').WithBindVariable('user_id', order_info['trafficker_id'])
+                                                trafficker_users = user_service.getUsersByStatement(trafficker_statement.ToStatement())
+                                                if trafficker_users and len(trafficker_users) > 0:
+                                                    if hasattr(trafficker_users, 'results') and trafficker_users.results:
+                                                        order_info['trafficker_name'] = trafficker_users.results[0].name
+                                            
+                                            if order_info['creator_id']:
+                                                creator_statement = ad_manager.StatementBuilder().Where('id = :user_id').WithBindVariable('user_id', order_info['creator_id'])
+                                                creator_users = user_service.getUsersByStatement(creator_statement.ToStatement())
+                                                if creator_users and len(creator_users) > 0:
+                                                    if hasattr(creator_users, 'results') and creator_users.results:
+                                                        order_info['creator_name'] = creator_users.results[0].name
+                                        except Exception as e:
+                                            print(f"[ERROR] Getting user names: {e}")
+                            
+                            print(f"[DEBUG]     Geo included: {geo['included']}, Geo excluded: {geo['excluded']}")
+                            return all_included, all_excluded, order_info
+                        else:
+                            print(f"[DEBUG]     Line item is NOT active or not SPONSORSHIP")
+                    except Exception as e:
+                        print(f"[DEBUG] Error processing line item: {e}")
+                        continue
+            else:
+                print(f"[DEBUG] No line items found containing '{search_string}' in any GAM account")
+                
+        except Exception as e:
+            print(f"[ERROR] Processing client: {e}")
+            print(f"[DEBUG] Full error details: {type(e).__name__}: {str(e)}")
+            continue
+    
+    return all_included, all_excluded, order_info
+
+def process_sheet(ws):
+    """Process a single sheet and update it with geo information"""
+    print(f"\n[INFO] Processing sheet: {ws.title}")
+    
+    # Read all campaign names from the sheet
+    try:
+        rows = ws.get_all_records()
+    except gspread.exceptions.GSpreadException as e:
+        if "duplicates" in str(e):
+            print(f"[WARNING] Sheet {ws.title} has duplicate headers, trying to fix...")
+            # Try to get records with explicit headers
+            all_values = ws.get_all_values()
+            if all_values and len(all_values) > 1:
+                # Use the first row as headers, skip empty columns
+                header_row = [col for col in all_values[0] if col.strip()]
+                data_rows = all_values[1:]
+                
+                # Create records manually
+                rows = []
+                for row in data_rows:
+                    if len(row) >= len(header_row):
+                        record = {}
+                        for i, header in enumerate(header_row):
+                            if i < len(row):
+                                record[header] = row[i]
+                            else:
+                                record[header] = ''
+                        rows.append(record)
+            else:
+                print(f"[ERROR] Could not process sheet {ws.title} due to header issues")
+                return
+        else:
+            print(f"[ERROR] Could not read sheet {ws.title}: {e}")
+            return
+    
+    if not rows:
+        print(f"[INFO] No data found in sheet {ws.title}")
+        return
+    
+    campaign_names = [row['Campaign Name'] for row in rows if row.get('Campaign Name')]
+    
+    # Prepare to update sheet
+    geo_included_col = 'geo included'
+    geo_excluded_col = 'geo excluded'
+    order_id_col = 'Order ID'
+    trafficker_col = 'Trafficker'
+    creator_col = 'Creator'
+    
+    header = ws.row_values(1)
+    
+    # Find the Placement column index
+    placement_idx = None
+    for i, col in enumerate(header):
+        if col == 'Placement':
+            placement_idx = i
+            break
+    
+    if placement_idx is None:
+        print(f"[ERROR] 'Placement' column not found in sheet {ws.title}")
+        return
+    
+    print(f"[INFO] Found 'Placement' column at index {placement_idx} in sheet {ws.title}")
+    
+    # Check for existing empty columns after Placement
+    empty_cols_after_placement = []
+    for i in range(placement_idx + 1, len(header)):
+        if not header[i] or header[i].strip() == '':
+            empty_cols_after_placement.append(i)
+    
+    print(f"[INFO] Found {len(empty_cols_after_placement)} empty columns after Placement")
+    
+    # Define the columns we need to add
+    required_columns = [geo_included_col, geo_excluded_col, order_id_col, trafficker_col, creator_col]
+    
+    # Check which columns already exist
+    existing_columns = {}
+    missing_columns = []
+    
+    for col in required_columns:
+        if col in header:
+            existing_columns[col] = header.index(col)
+        else:
+            missing_columns.append(col)
+    
+    print(f"[INFO] Existing columns: {list(existing_columns.keys())}")
+    print(f"[INFO] Missing columns: {missing_columns}")
+    
+    # Add missing columns after Placement
+    if missing_columns:
+        if len(empty_cols_after_placement) >= len(missing_columns):
+            # Use existing empty columns
+            for i, col in enumerate(missing_columns):
+                col_idx = empty_cols_after_placement[i]
+                ws.update_cell(1, col_idx + 1, col)  # +1 because gspread uses 1-based indexing
+                header[col_idx] = col
+                print(f"[INFO] Added '{col}' to existing empty column {col_idx + 1}")
+        else:
+            # Add new columns at the end
+            current_end = len(header)
+            for col in missing_columns:
+                ws.update_cell(1, current_end + 1, col)
+                header.append(col)
+                current_end += 1
+                print(f"[INFO] Added '{col}' as new column {current_end}")
+    
+    # Update header indices for existing columns
+    for col in required_columns:
+        if col in header:
+            existing_columns[col] = header.index(col)
+    
+    # Process each row in the sheet
+    for i, row in enumerate(rows, start=2):  # Start from row 2 (after header)
+        try:
+            campaign_name = row.get('Campaign Name', '')
+            expresso_id = row.get('Expresso ID', '')
+            package_name = row.get('Package Name', '')
+            platform = row.get('Platform', '')
+            
+            # Skip if Platform is 'App'
+            if platform == 'App':
+                print(f"[SKIP] Row {i} skipped due to Platform 'App'.")
+                continue
+            
+            # Skip if Package Name contains excluded substrings
+            if any(substring.lower() in package_name.lower() for substring in EXCLUDE_SUBSTRINGS):
+                print(f"[SKIP] Row {i} skipped due to excluded Package Name.")
+                continue
+            
+            if not campaign_name:
+                continue
+            
+            print(f"[INFO] Processing campaign: {campaign_name}")
+            
+            # Check cache first
+            cache_key = f"{expresso_id}_{campaign_name}"
+            if cache_key in result_cache:
+                print(f"[CACHE] Using cached results for: {cache_key}")
+                all_included, all_excluded, order_info = result_cache[cache_key]
+            else:
+                # Try to find geo using campaign name
+                all_included, all_excluded, order_info = fetch_geo_for_search_string(campaign_name, clients)
+                
+                # If no geo found, try using Expresso ID
+                if not all_included and not all_excluded and expresso_id:
+                    print(f"[INFO] No geo found for campaign, trying Expresso ID: {expresso_id}")
+                    all_included, all_excluded, order_info = fetch_geo_for_search_string(str(expresso_id), clients)
+                
+                # Cache the results
+                result_cache[cache_key] = (all_included, all_excluded, order_info)
+            
+            # Update the sheet with geo information
+            if all_included or all_excluded or order_info:
+                # Get column indices
+                geo_included_idx = existing_columns.get(geo_included_col, -1) + 1
+                geo_excluded_idx = existing_columns.get(geo_excluded_col, -1) + 1
+                order_id_idx = existing_columns.get(order_id_col, -1) + 1
+                trafficker_idx = existing_columns.get(trafficker_col, -1) + 1
+                creator_idx = existing_columns.get(creator_col, -1) + 1
+                
+                # Check if all required columns exist
+                if -1 in [geo_included_idx, geo_excluded_idx, order_id_idx, trafficker_idx, creator_idx]:
+                    print(f"[ERROR] Some required columns are missing in sheet {ws.title}")
+                    continue
+                
+                # Prepare values
+                geo_included_str = ', '.join([loc['name'] for loc in all_included]) if all_included else ''
+                geo_excluded_str = ', '.join([loc['name'] for loc in all_excluded]) if all_excluded else ''
+                order_id_str = str(order_info.get('order_id', '')) if order_info else ''
+                trafficker_str = order_info.get('trafficker_name', '') if order_info else ''
+                creator_str = order_info.get('creator_name', '') if order_info else ''
+                
+                # Update all columns in one batch
+                updates = []
+                if geo_included_str:
+                    updates.append((i, geo_included_idx, geo_included_str))
+                if geo_excluded_str:
+                    updates.append((i, geo_excluded_idx, geo_excluded_str))
+                if order_id_str:
+                    updates.append((i, order_id_idx, order_id_str))
+                if trafficker_str:
+                    updates.append((i, trafficker_idx, trafficker_str))
+                if creator_str:
+                    updates.append((i, creator_idx, creator_str))
+                
+                if updates:
+                    # Convert to gspread format (row, col, value)
+                    cell_updates = [gspread.Cell(row, col, value) for row, col, value in updates]
+                    ws.update_cells(cell_updates)
+                    
+                    print(f"[INFO] Updated row {i} with geo included: {geo_included_str}, geo excluded: {geo_excluded_str}, order ID: {order_id_str}, trafficker: {trafficker_str}, creator: {creator_str}")
+                    
+                    # Rate limiting
+                    time.sleep(1.0)
+            
+        except Exception as e:
+            print(f"[ERROR] Processing row {i}: {e}")
+            continue
+    
+    print(f"[DONE] Completed processing sheet: {ws.title}")
+
+# Process all sheets that need updating
+for ws in sheets_to_update:
+    process_sheet(ws)
+
+print(f"\n[DONE] All sheets processed successfully!") 
