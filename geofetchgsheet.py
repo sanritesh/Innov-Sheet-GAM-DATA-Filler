@@ -149,9 +149,9 @@ def needs_updating(ws):
         geo_excluded_idx = None
         
         for i, col in enumerate(header):
-            if col == 'geo included':
+            if col and col.strip() == 'geo included':
                 geo_included_idx = i
-            elif col == 'geo excluded':
+            elif col and col.strip() == 'geo excluded':
                 geo_excluded_idx = i
         
         # If our columns don't exist, sheet needs updating
@@ -516,38 +516,50 @@ def process_sheet(ws):
     try:
         rows = ws.get_all_records()
     except gspread.exceptions.GSpreadException as e:
-        if "duplicates" in str(e):
-            print(f"[WARNING] Sheet {ws.title} has duplicate headers, trying to fix...")
-            # Try to get records with explicit headers
-            all_values = ws.get_all_values()
-            if all_values and len(all_values) > 1:
-                # Use the first row as headers, skip empty columns
-                header_row = [col for col in all_values[0] if col.strip()]
-                data_rows = all_values[1:]
-                
-                # Create records manually
-                rows = []
-                for row in data_rows:
-                    if len(row) >= len(header_row):
-                        record = {}
-                        for i, header in enumerate(header_row):
-                            if i < len(row):
-                                record[header] = row[i]
-                            else:
-                                record[header] = ''
-                        rows.append(record)
-            else:
-                print(f"[ERROR] Could not process sheet {ws.title} due to header issues")
-                return
+        print(f"[WARNING] Sheet {ws.title} has header issues, trying to fix...")
+        # Try to get records with explicit headers
+        all_values = ws.get_all_values()
+        if all_values and len(all_values) > 1:
+            # Use the first row as headers, skip empty columns
+            header_row = []
+            for col in all_values[0]:
+                if col and col.strip():
+                    header_row.append(col.strip())
+                else:
+                    header_row.append(f"Column_{len(header_row)}")  # Give empty columns a name
+            
+            data_rows = all_values[1:]
+            
+            # Create records manually
+            rows = []
+            for row in data_rows:
+                if len(row) >= len(header_row):
+                    record = {}
+                    for i, header in enumerate(header_row):
+                        if i < len(row):
+                            record[header] = row[i]
+                        else:
+                            record[header] = ''
+                    rows.append(record)
+            
+            print(f"[INFO] Successfully processed sheet with {len(rows)} rows using {len(header_row)} headers")
         else:
-            print(f"[ERROR] Could not read sheet {ws.title}: {e}")
+            print(f"[ERROR] Could not process sheet {ws.title} due to header issues")
             return
     
     if not rows:
         print(f"[INFO] No data found in sheet {ws.title}")
         return
     
-    campaign_names = [row['Campaign Name'] for row in rows if row.get('Campaign Name')]
+    # Filter out rows without campaign names
+    valid_rows = [row for row in rows if row.get('Campaign Name') and row['Campaign Name'].strip()]
+    if not valid_rows:
+        print(f"[INFO] No valid campaign names found in sheet {ws.title}")
+        return
+    
+    print(f"[INFO] Found {len(valid_rows)} rows with valid campaign names in sheet {ws.title}")
+    
+    campaign_names = [row['Campaign Name'] for row in valid_rows]
     
     # Prepare to update sheet
     geo_included_col = 'geo included'
@@ -619,7 +631,7 @@ def process_sheet(ws):
             existing_columns[col] = header.index(col)
     
     # Process each row in the sheet
-    for i, row in enumerate(rows, start=2):  # Start from row 2 (after header)
+    for i, row in enumerate(valid_rows, start=2):  # Start from row 2 (after header)
         try:
             campaign_name = row.get('Campaign Name', '')
             expresso_id = row.get('Expresso ID', '')
