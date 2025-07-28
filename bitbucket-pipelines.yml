@@ -15,6 +15,22 @@ definitions:
         caches:
           - pip
         script:
+          # Create service account JSON file if using environment variable
+          - |
+            if [ ! -z "$GOOGLE_SERVICE_ACCOUNT_JSON" ]; then
+              echo "$GOOGLE_SERVICE_ACCOUNT_JSON" > service-account.json
+              echo "Service account JSON created from environment variable"
+            fi
+          # Generate YAML files from templates
+          - |
+            if [ ! -z "$GOOGLE_CLIENT_ID" ] && [ ! -z "$GOOGLE_CLIENT_SECRET" ] && [ ! -z "$GOOGLE_REFRESH_TOKEN" ]; then
+              # Replace placeholders in templates
+              sed "s/\${GOOGLE_CLIENT_ID}/$GOOGLE_CLIENT_ID/g; s/\${GOOGLE_CLIENT_SECRET}/$GOOGLE_CLIENT_SECRET/g; s/\${GOOGLE_REFRESH_TOKEN}/$GOOGLE_REFRESH_TOKEN/g" googleadsN.yaml.template > googleadsN.yaml
+              sed "s/\${GOOGLE_CLIENT_ID}/$GOOGLE_CLIENT_ID/g; s/\${GOOGLE_CLIENT_SECRET}/$GOOGLE_CLIENT_SECRET/g; s/\${GOOGLE_REFRESH_TOKEN}/$GOOGLE_REFRESH_TOKEN/g" googleads.yaml.template > googleads.yaml
+              echo "YAML files generated from templates"
+            else
+              echo "Warning: OAuth2 credentials not found, using existing YAML files"
+            fi
           - python geofetchgsheet.py
         artifacts:
           - logs/**
@@ -32,4 +48,21 @@ pipelines:
   pull-requests:
     '**':
       - step: *setup-environment
-      - step: *run-gam-script 
+      - step: *run-gam-script
+
+  custom:
+    test-variables:
+      - step:
+          name: Test Repository Variables
+          script:
+            - echo "Testing repository variables..."
+            - echo "GOOGLE_SHEET_ID: $GOOGLE_SHEET_ID"
+            - echo "GAM_NETWORK_CODES: $GAM_NETWORK_CODES"
+            - echo "EXCLUDE_SUBSTRINGS: $EXCLUDE_SUBSTRINGS"
+            - echo "EXCLUDE_PLATFORMS: $EXCLUDE_PLATFORMS"
+            - |
+              if [ ! -z "$GOOGLE_SERVICE_ACCOUNT_JSON" ]; then
+                echo "GOOGLE_SERVICE_ACCOUNT_JSON: [SET]"
+              else
+                echo "GOOGLE_SERVICE_ACCOUNT_JSON: [NOT SET]"
+              fi 
