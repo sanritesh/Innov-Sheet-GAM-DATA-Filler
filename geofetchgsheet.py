@@ -56,7 +56,9 @@ def get_date_sheets(sh):
     """Get all sheets that follow any date pattern (today and future only)"""
     all_sheets = sh.worksheets()
     date_sheets = []
-    today = datetime.now()
+    # Use IST timezone for consistent date comparison
+    tz = pytz.timezone('Asia/Kolkata')
+    today = datetime.now(tz)
     
     print(f"[DEBUG] Found {len(all_sheets)} total sheets")
     print(f"[DEBUG] Sheet names: {[sheet.title for sheet in all_sheets]}")
@@ -65,6 +67,8 @@ def get_date_sheets(sh):
     date_patterns = [
         "%d %B",       # "26 July" (with leading zero)
         "%B %d",       # "July 26" (with leading zero)
+        "%d %b",       # "26 Aug" (abbreviated month)
+        "%b %d",       # "Aug 26" (abbreviated month)
         "%d/%m",       # "26/07" (with leading zero)
         "%m/%d",       # "07/26" (with leading zero)
         "%d-%m",       # "26-07" (with leading zero)
@@ -73,6 +77,8 @@ def get_date_sheets(sh):
         "%m.%d",       # "07.26" (with leading zero)
         "%d %B %Y",    # "26 July 2025" (with leading zero)
         "%B %d %Y",    # "July 26 2025" (with leading zero)
+        "%d %b %Y",    # "26 Aug 2025" (abbreviated month)
+        "%b %d %Y",    # "Aug 26 2025" (abbreviated month)
         "%d/%m/%Y",    # "26/07/2025" (with leading zero)
         "%m/%d/%Y",    # "07/26/2025" (with leading zero)
         "%d-%m-%Y",    # "26-07-2025" (with leading zero)
@@ -83,30 +89,49 @@ def get_date_sheets(sh):
     
     # Try to parse with flexible day format (handle both single and double digit days)
     def try_parse_date(sheet_title):
+        print(f"[DEBUG]   Trying to parse: '{sheet_title}'")
         # First try the standard patterns
         for pattern in date_patterns:
             try:
                 date_obj = datetime.strptime(sheet_title, pattern)
                 if date_obj.year >= 2020:
-                    return date_obj
+                    # Make timezone-aware for proper comparison
+                    tz_aware_date = tz.localize(date_obj)
+                    print(f"[DEBUG]   Successfully parsed with pattern '{pattern}': {tz_aware_date}")
+                    return tz_aware_date
             except ValueError:
                 continue
         
         # If standard patterns fail, try to handle single-digit days manually
-        # Look for patterns like "1 July", "2 July", etc.
+        # Look for patterns like "1 July", "2 Aug", etc.
         import re
         match = re.match(r'^(\d{1,2})\s+([A-Za-z]+)$', sheet_title)
         if match:
             day_str, month_str = match.groups()
+            print(f"[DEBUG]   Regex matched: day='{day_str}', month='{month_str}'")
             try:
-                # Try to parse with the day as-is
+                # Try to parse with the day as-is, first with full month name
                 date_str = f"{day_str} {month_str} 2025"
                 date_obj = datetime.strptime(date_str, "%d %B %Y")
                 if date_obj.year >= 2020:
-                    return date_obj
+                    # Make timezone-aware for proper comparison
+                    tz_aware_date = tz.localize(date_obj)
+                    print(f"[DEBUG]   Successfully parsed with full month: {tz_aware_date}")
+                    return tz_aware_date
             except ValueError:
-                pass
+                try:
+                    # Try with abbreviated month name
+                    date_obj = datetime.strptime(date_str, "%d %b %Y")
+                    if date_obj.year >= 2020:
+                        # Make timezone-aware for proper comparison
+                        tz_aware_date = tz.localize(date_obj)
+                        print(f"[DEBUG]   Successfully parsed with abbreviated month: {tz_aware_date}")
+                        return tz_aware_date
+                except ValueError:
+                    print(f"[DEBUG]   Failed to parse '{date_str}' with both full and abbreviated month patterns")
+                    pass
         
+        print(f"[DEBUG]   No pattern matched for '{sheet_title}'")
         return None
     
     for sheet in all_sheets:
@@ -161,8 +186,9 @@ def needs_updating(ws):
         # Check if any rows have data in our columns
         for row in all_values[1:]:  # Skip header
             if len(row) > max(geo_included_idx, geo_excluded_idx):
-                if (row[geo_included_idx] and row[geo_included_idx].strip()) or \
-                   (row[geo_excluded_idx] and row[geo_excluded_idx].strip()):
+                geo_included_val = str(row[geo_included_idx]).strip() if row[geo_included_idx] else ''
+                geo_excluded_val = str(row[geo_excluded_idx]).strip() if row[geo_excluded_idx] else ''
+                if geo_included_val or geo_excluded_val:
                     return False  # Found data, sheet is already updated
         
         return True  # No data found in our columns
@@ -523,8 +549,9 @@ def process_sheet(ws):
             # Use the first row as headers, skip empty columns
             header_row = []
             for col in all_values[0]:
-                if col and col.strip():
-                    header_row.append(col.strip())
+                col_str = str(col).strip() if col else ''
+                if col_str:
+                    header_row.append(col_str)
                 else:
                     header_row.append(f"Column_{len(header_row)}")  # Give empty columns a name
             
@@ -552,14 +579,21 @@ def process_sheet(ws):
         return
     
     # Filter out rows without campaign names
-    valid_rows = [row for row in rows if row.get('Campaign Name') and row['Campaign Name'].strip()]
+    valid_rows = []
+    for row in rows:
+        campaign_name = row.get('Campaign Name')
+        if campaign_name:
+            # Convert to string and check if it's not empty after stripping
+            campaign_name_str = str(campaign_name).strip()
+            if campaign_name_str:
+                valid_rows.append(row)
     if not valid_rows:
         print(f"[INFO] No valid campaign names found in sheet {ws.title}")
         return
     
     print(f"[INFO] Found {len(valid_rows)} rows with valid campaign names in sheet {ws.title}")
     
-    campaign_names = [row['Campaign Name'] for row in valid_rows]
+    campaign_names = [str(row['Campaign Name']).strip() for row in valid_rows]
     
     # Prepare to update sheet
     geo_included_col = 'geo included'
@@ -586,7 +620,8 @@ def process_sheet(ws):
     # Check for existing empty columns after Placement
     empty_cols_after_placement = []
     for i in range(placement_idx + 1, len(header)):
-        if not header[i] or header[i].strip() == '':
+        header_val = str(header[i]).strip() if header[i] else ''
+        if not header_val:
             empty_cols_after_placement.append(i)
     
     print(f"[INFO] Found {len(empty_cols_after_placement)} empty columns after Placement")
@@ -633,10 +668,10 @@ def process_sheet(ws):
     # Process each row in the sheet
     for i, row in enumerate(valid_rows, start=2):  # Start from row 2 (after header)
         try:
-            campaign_name = row.get('Campaign Name', '')
-            expresso_id = row.get('Expresso ID', '')
-            package_name = row.get('Package Name', '')
-            platform = row.get('Platform', '')
+            campaign_name = str(row.get('Campaign Name', '')).strip()
+            expresso_id = str(row.get('Expresso ID', '')).strip()
+            package_name = str(row.get('Package Name', '')).strip()
+            platform = str(row.get('Platform', '')).strip()
             
             # Skip if Platform is 'App'
             if platform == 'App':
