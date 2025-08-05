@@ -333,14 +333,19 @@ def is_active_sponsorship(li):
             print(f"[DEBUG] Skipping line item with past date range: start={start_date_only}, end={end_date_only} < {current_date}")
             return False
         
-        # Filter 2: Exclude if both start and end dates are current date or earlier
-        if start_date_only <= current_date and end_date_only <= current_date:
-            print(f"[DEBUG] Skipping line item with current/past date range: start={start_date_only}, end={end_date_only} <= {current_date}")
+        # Filter 2: Exclude if both start and end dates are in the past (exclude)
+        if start_date_only < current_date and end_date_only < current_date:
+            print(f"[DEBUG] Skipping line item with past date range: start={start_date_only}, end={end_date_only} < {current_date}")
             return False
         
         # Filter 3: Include if end date is T+1 or greater (multi-day CPD campaign)
         if end_date_only > current_date:
             print(f"[DEBUG] Including line item with future end date: start={start_date_only}, end={end_date_only} > {current_date}")
+            return True
+        
+        # Filter 4: Include same-day campaigns (start and end on current date)
+        if start_date_only == current_date and end_date_only == current_date:
+            print(f"[DEBUG] Including same-day line item: start={start_date_only}, end={end_date_only} == {current_date}")
             return True
         
         # Check if line item is active for current date (end date should be in future)
@@ -388,14 +393,19 @@ def is_valid_order(order):
                     print(f"[DEBUG] Skipping order with past date range: start={start_date_only}, end={end_date_only} < {current_date}")
                     return False
                 
-                # Check if both start and end dates are current date or earlier
-                if start_date_only <= current_date and end_date_only <= current_date:
-                    print(f"[DEBUG] Skipping order with current/past date range: start={start_date_only}, end={end_date_only} <= {current_date}")
+                # Check if both start and end dates are in the past (exclude)
+                if start_date_only < current_date and end_date_only < current_date:
+                    print(f"[DEBUG] Skipping order with past date range: start={start_date_only}, end={end_date_only} < {current_date}")
                     return False
                 
                 # Include if end date is T+1 or greater (multi-day CPD campaign)
                 if end_date_only > current_date:
                     print(f"[DEBUG] Including order with future end date: start={start_date_only}, end={end_date_only} > {current_date}")
+                    return True
+                
+                # Include same-day campaigns (start and end on current date)
+                if start_date_only == current_date and end_date_only == current_date:
+                    print(f"[DEBUG] Including same-day order: start={start_date_only}, end={end_date_only} == {current_date}")
                     return True
         
         return True
@@ -404,10 +414,92 @@ def is_valid_order(order):
         print(f"[ERROR] Checking order validity: {e}")
         return False
 
+def process_single_order(order, client, order_name, order_id):
+    """Process a single order and return its information including geo, trafficker, creator"""
+    try:
+        # Get client network code for identification
+        client_network = getattr(client, 'network_code', 'unknown')
+        # Get line items for this order
+        line_item_service = client.GetService('LineItemService', version='v202411')
+        
+        statement = ad_manager.StatementBuilder().Where('orderId = :order_id').WithBindVariable('order_id', order_id)
+        line_items = line_item_service.getLineItemsByStatement(statement.ToStatement())
+        
+        print(f"[DEBUG] Found {len(line_items) if line_items else 0} line items for order {order_id}")
+        
+        if line_items and len(line_items) > 0:
+            # Access the results array from LineItemPage
+            if hasattr(line_items, 'results'):
+                line_item_results = line_items.results
+            else:
+                line_item_results = line_items
+            
+            for li in line_item_results:
+                try:
+                    if hasattr(li, 'name'):
+                        li_name = li.name
+                        li_type = li.lineItemType
+                    elif isinstance(li, dict):
+                        li_name = li.get('name', 'Unknown')
+                        li_type = li.get('lineItemType', 'Unknown')
+                    else:
+                        print(f"[DEBUG]   Unknown line item structure: {li}")
+                        continue
+                    
+                    print(f"[DEBUG]   Line item: {li_name}, type: {li_type}")
+                    
+                    # Check if line item is active and of type SPONSORSHIP
+                    if is_active_sponsorship(li):
+                        print(f"[DEBUG]     Line item is active and of type SPONSORSHIP")
+                        geo = extract_geo(li)
+                        
+                        # Get order info
+                        order_info = {
+                            'order_id': order_id,
+                            'order_name': order_name,
+                            'client_network': client_network,
+                            'trafficker_id': order.traffickerId if hasattr(order, 'traffickerId') else None,
+                            'creator_id': order.creatorId if hasattr(order, 'creatorId') else None,
+                            'geo_included': geo['included'],
+                            'geo_excluded': geo['excluded']
+                        }
+                        
+                        # Get trafficker and creator names
+                        try:
+                            user_service = client.GetService('UserService', version='v202411')
+                            if order_info['trafficker_id']:
+                                trafficker_statement = ad_manager.StatementBuilder().Where('id = :user_id').WithBindVariable('user_id', order_info['trafficker_id'])
+                                trafficker_users = user_service.getUsersByStatement(trafficker_statement.ToStatement())
+                                if trafficker_users and len(trafficker_users) > 0:
+                                    if hasattr(trafficker_users, 'results') and trafficker_users.results:
+                                        order_info['trafficker_name'] = trafficker_users.results[0].name
+                            
+                            if order_info['creator_id']:
+                                creator_statement = ad_manager.StatementBuilder().Where('id = :user_id').WithBindVariable('user_id', order_info['creator_id'])
+                                creator_users = user_service.getUsersByStatement(creator_statement.ToStatement())
+                                if creator_users and len(creator_users) > 0:
+                                    if hasattr(creator_users, 'results') and creator_users.results:
+                                        order_info['creator_name'] = creator_users.results[0].name
+                        except Exception as e:
+                            print(f"[ERROR] Getting user names: {e}")
+                        
+                        print(f"[DEBUG]     Geo included: {geo['included']}, Geo excluded: {geo['excluded']}")
+                        return order_info
+                    else:
+                        print(f"[DEBUG]     Line item is NOT active or not SPONSORSHIP")
+                except Exception as e:
+                    print(f"[DEBUG] Error processing line item: {e}")
+                    continue
+        
+        return None
+        
+    except Exception as e:
+        print(f"[ERROR] Processing single order: {e}")
+        return None
+
 def fetch_geo_for_search_string(search_string, clients):
-    all_included = []
-    all_excluded = []
-    order_info = {}
+    """Fetch geo information for all valid orders matching the search string"""
+    all_orders_info = []  # List to store multiple order information
     
     for client in clients:
         try:
@@ -432,107 +524,44 @@ def fetch_geo_for_search_string(search_string, clients):
                         # Try to access the results attribute
                         order_results = orders.results
                         if order_results and len(order_results) > 0:
-                            first_order = order_results[0]
-                            print(f"[DEBUG] First order: {first_order}")
-                            print(f"[DEBUG] First order type: {type(first_order)}")
+                            print(f"[DEBUG] Found {len(order_results)} orders, processing all valid ones")
                             
-                            # Check if order is valid (not completed, future start date)
-                            if not is_valid_order(first_order):
-                                print(f"[DEBUG] Skipping invalid order")
-                                continue
-                            
-                            if hasattr(first_order, 'name'):
-                                order_name = first_order.name
-                                order_id = first_order.id
-                            elif isinstance(first_order, dict):
-                                order_name = first_order.get('name', 'Unknown')
-                                order_id = first_order.get('id', 'Unknown')
-                            else:
-                                print(f"[DEBUG] Unknown order structure: {first_order}")
-                                continue
-                            
-                            print(f"[DEBUG] Found valid order: {order_name} (ID: {order_id})")
+                            # Process all orders, not just the first one
+                            for order in order_results:
+                                print(f"[DEBUG] Processing order: {order}")
+                                print(f"[DEBUG] Order type: {type(order)}")
+                                
+                                # Check if order is valid (not completed, future start date)
+                                if not is_valid_order(order):
+                                    print(f"[DEBUG] Skipping invalid order")
+                                    continue
+                                
+                                if hasattr(order, 'name'):
+                                    order_name = order.name
+                                    order_id = order.id
+                                elif isinstance(order, dict):
+                                    order_name = order.get('name', 'Unknown')
+                                    order_id = order.get('id', 'Unknown')
+                                else:
+                                    print(f"[DEBUG] Unknown order structure: {order}")
+                                    continue
+                                
+                                print(f"[DEBUG] Found valid order: {order_name} (ID: {order_id})")
+                                
+                                # Process this order and get its information
+                                order_info = process_single_order(order, client, order_name, order_id)
+                                if order_info:
+                                    all_orders_info.append(order_info)
                         else:
                             print(f"[DEBUG] No results in OrderPage")
                             continue
                     else:
                         print(f"[DEBUG] Orders object has no 'results' attribute: {orders}")
                         continue
-                    
-                    # Get line items for this order
-                    line_item_service = client.GetService('LineItemService', version='v202411')
-                    
-                    statement = ad_manager.StatementBuilder().Where('orderId = :order_id').WithBindVariable('order_id', order_id)
-                    line_items = line_item_service.getLineItemsByStatement(statement.ToStatement())
-                    
-                    print(f"[DEBUG] Found {len(line_items) if line_items else 0} line items for order {order_id}")
-                    
                 except Exception as e:
                     print(f"[DEBUG] Error accessing order details: {e}")
                     print(f"[DEBUG] Full error: {type(e).__name__}: {str(e)}")
                     continue
-                
-                if line_items and len(line_items) > 0:
-                    # Access the results array from LineItemPage
-                    if hasattr(line_items, 'results'):
-                        line_item_results = line_items.results
-                    else:
-                        line_item_results = line_items
-                    
-                    for li in line_item_results:
-                        try:
-                            if hasattr(li, 'name'):
-                                li_name = li.name
-                                li_type = li.lineItemType
-                            elif isinstance(li, dict):
-                                li_name = li.get('name', 'Unknown')
-                                li_type = li.get('lineItemType', 'Unknown')
-                            else:
-                                print(f"[DEBUG]   Unknown line item structure: {li}")
-                                continue
-                            
-                            print(f"[DEBUG]   Line item: {li_name}, type: {li_type}")
-                            
-                            # Check if line item is active and of type SPONSORSHIP
-                            if is_active_sponsorship(li):
-                                print(f"[DEBUG]     Line item is active and of type SPONSORSHIP")
-                                geo = extract_geo(li)
-                                all_included.extend(geo['included'])
-                                all_excluded.extend(geo['excluded'])
-                                
-                                # Get order info
-                                order_info = {
-                                    'order_id': order_id,
-                                    'trafficker_id': first_order.traffickerId if hasattr(first_order, 'traffickerId') else None,
-                                    'creator_id': first_order.creatorId if hasattr(first_order, 'creatorId') else None
-                                }
-                                
-                                # Get trafficker and creator names
-                                try:
-                                    user_service = client.GetService('UserService', version='v202411')
-                                    if order_info['trafficker_id']:
-                                        trafficker_statement = ad_manager.StatementBuilder().Where('id = :user_id').WithBindVariable('user_id', order_info['trafficker_id'])
-                                        trafficker_users = user_service.getUsersByStatement(trafficker_statement.ToStatement())
-                                        if trafficker_users and len(trafficker_users) > 0:
-                                            if hasattr(trafficker_users, 'results') and trafficker_users.results:
-                                                order_info['trafficker_name'] = trafficker_users.results[0].name
-                                    
-                                    if order_info['creator_id']:
-                                        creator_statement = ad_manager.StatementBuilder().Where('id = :user_id').WithBindVariable('user_id', order_info['creator_id'])
-                                        creator_users = user_service.getUsersByStatement(creator_statement.ToStatement())
-                                        if creator_users and len(creator_users) > 0:
-                                            if hasattr(creator_users, 'results') and creator_users.results:
-                                                order_info['creator_name'] = creator_users.results[0].name
-                                except Exception as e:
-                                    print(f"[ERROR] Getting user names: {e}")
-                                
-                                print(f"[DEBUG]     Geo included: {geo['included']}, Geo excluded: {geo['excluded']}")
-                                return all_included, all_excluded, order_info
-                            else:
-                                print(f"[DEBUG]     Line item is NOT active or not SPONSORSHIP")
-                        except Exception as e:
-                            print(f"[DEBUG] Error processing line item: {e}")
-                            continue
             
             # If no orders found, try direct line item search
             print(f"[DEBUG] No orders found containing '{search_string}', trying direct line item search...")
@@ -587,6 +616,7 @@ def fetch_geo_for_search_string(search_string, clients):
                                         
                                         order_info = {
                                             'order_id': first_order.id,
+                                            'client_network': client_network,
                                             'trafficker_id': first_order.traffickerId if hasattr(first_order, 'traffickerId') else None,
                                             'creator_id': first_order.creatorId if hasattr(first_order, 'creatorId') else None
                                         }
@@ -611,7 +641,14 @@ def fetch_geo_for_search_string(search_string, clients):
                                             print(f"[ERROR] Getting user names: {e}")
                             
                             print(f"[DEBUG]     Geo included: {geo['included']}, Geo excluded: {geo['excluded']}")
-                            return all_included, all_excluded, order_info
+                            
+                            # Add order name to the order info
+                            order_info['order_name'] = first_order.name if hasattr(first_order, 'name') else 'Unknown'
+                            order_info['geo_included'] = geo['included']
+                            order_info['geo_excluded'] = geo['excluded']
+                            
+                            all_orders_info.append(order_info)
+                            return all_orders_info
                         else:
                             print(f"[DEBUG]     Line item is NOT active or not SPONSORSHIP")
                     except Exception as e:
@@ -625,7 +662,7 @@ def fetch_geo_for_search_string(search_string, clients):
             print(f"[DEBUG] Full error details: {type(e).__name__}: {str(e)}")
             continue
     
-    return all_included, all_excluded, order_info
+    return all_orders_info
 
 def process_sheet(ws):
     """Process a single sheet and update it with geo information"""
@@ -688,12 +725,21 @@ def process_sheet(ws):
     
     campaign_names = [str(row['Campaign Name']).strip() for row in valid_rows]
     
-    # Prepare to update sheet
+    # Prepare to update sheet with separate columns for each GAM client
     geo_included_col = 'geo included'
     geo_excluded_col = 'geo excluded'
-    order_id_col = 'Order ID'
-    trafficker_col = 'Trafficker'
-    creator_col = 'Creator'
+    
+    # Client 1 (Network 23037861279) columns
+    order_id_col_1 = 'Order ID (23037861279)'
+    order_name_col_1 = 'Order Name (23037861279)'
+    trafficker_col_1 = 'Trafficker (23037861279)'
+    creator_col_1 = 'Creator (23037861279)'
+    
+    # Client 2 (Network 7176) columns
+    order_id_col_2 = 'Order ID (7176)'
+    order_name_col_2 = 'Order Name (7176)'
+    trafficker_col_2 = 'Trafficker (7176)'
+    creator_col_2 = 'Creator (7176)'
     
     header = ws.row_values(1)
     
@@ -720,7 +766,11 @@ def process_sheet(ws):
     print(f"[INFO] Found {len(empty_cols_after_placement)} empty columns after Placement")
     
     # Define the columns we need to add
-    required_columns = [geo_included_col, geo_excluded_col, order_id_col, trafficker_col, creator_col]
+    required_columns = [
+        geo_included_col, geo_excluded_col,
+        order_id_col_1, order_name_col_1, trafficker_col_1, creator_col_1,
+        order_id_col_2, order_name_col_2, trafficker_col_2, creator_col_2
+    ]
     
     # Check which columns already exist
     existing_columns = {}
@@ -785,21 +835,21 @@ def process_sheet(ws):
             cache_key = f"{expresso_id}_{campaign_name}"
             if cache_key in result_cache:
                 print(f"[CACHE] Using cached results for: {cache_key}")
-                all_included, all_excluded, order_info = result_cache[cache_key]
+                all_orders_info = result_cache[cache_key]
             else:
                 # Try to find geo using campaign name
-                all_included, all_excluded, order_info = fetch_geo_for_search_string(campaign_name, clients)
+                all_orders_info = fetch_geo_for_search_string(campaign_name, clients)
                 
-                # If no geo found, try using Expresso ID
-                if not all_included and not all_excluded and expresso_id:
-                    print(f"[INFO] No geo found for campaign, trying Expresso ID: {expresso_id}")
-                    all_included, all_excluded, order_info = fetch_geo_for_search_string(str(expresso_id), clients)
+                # If no orders found, try using Expresso ID
+                if not all_orders_info and expresso_id:
+                    print(f"[INFO] No orders found for campaign, trying Expresso ID: {expresso_id}")
+                    all_orders_info = fetch_geo_for_search_string(str(expresso_id), clients)
                 
                 # Cache the results
-                result_cache[cache_key] = (all_included, all_excluded, order_info)
+                result_cache[cache_key] = all_orders_info
             
-            # Update the sheet with geo information
-            if all_included or all_excluded or order_info:
+            # Update the sheet with geo information for all orders
+            if all_orders_info:
                 # Get column indices
                 geo_included_idx = existing_columns.get(geo_included_col, -1) + 1
                 geo_excluded_idx = existing_columns.get(geo_excluded_col, -1) + 1
@@ -808,39 +858,84 @@ def process_sheet(ws):
                 creator_idx = existing_columns.get(creator_col, -1) + 1
                 
                 # Check if all required columns exist
-                if -1 in [geo_included_idx, geo_excluded_idx, order_id_idx, trafficker_idx, creator_idx]:
+                geo_included_idx = existing_columns.get(geo_included_col, -1) + 1
+                geo_excluded_idx = existing_columns.get(geo_excluded_col, -1) + 1
+                
+                # Client 1 columns
+                order_id_idx_1 = existing_columns.get(order_id_col_1, -1) + 1
+                order_name_idx_1 = existing_columns.get(order_name_col_1, -1) + 1
+                trafficker_idx_1 = existing_columns.get(trafficker_col_1, -1) + 1
+                creator_idx_1 = existing_columns.get(creator_col_1, -1) + 1
+                
+                # Client 2 columns
+                order_id_idx_2 = existing_columns.get(order_id_col_2, -1) + 1
+                order_name_idx_2 = existing_columns.get(order_name_col_2, -1) + 1
+                trafficker_idx_2 = existing_columns.get(trafficker_col_2, -1) + 1
+                creator_idx_2 = existing_columns.get(creator_col_2, -1) + 1
+                
+                if -1 in [geo_included_idx, geo_excluded_idx, order_id_idx_1, order_name_idx_1, trafficker_idx_1, creator_idx_1, order_id_idx_2, order_name_idx_2, trafficker_idx_2, creator_idx_2]:
                     print(f"[ERROR] Some required columns are missing in sheet {ws.title}")
                     continue
                 
-                # Prepare values
-                geo_included_str = ', '.join([loc['name'] for loc in all_included]) if all_included else ''
-                geo_excluded_str = ', '.join([loc['name'] for loc in all_excluded]) if all_excluded else ''
-                order_id_str = str(order_info.get('order_id', '')) if order_info else ''
-                trafficker_str = order_info.get('trafficker_name', '') if order_info else ''
-                creator_str = order_info.get('creator_name', '') if order_info else ''
-                
-                # Update all columns in one batch
-                updates = []
-                if geo_included_str:
-                    updates.append((i, geo_included_idx, geo_included_str))
-                if geo_excluded_str:
-                    updates.append((i, geo_excluded_idx, geo_excluded_str))
-                if order_id_str:
-                    updates.append((i, order_id_idx, order_id_str))
-                if trafficker_str:
-                    updates.append((i, trafficker_idx, trafficker_str))
-                if creator_str:
-                    updates.append((i, creator_idx, creator_str))
-                
-                if updates:
-                    # Convert to gspread format (row, col, value)
-                    cell_updates = [gspread.Cell(row, col, value) for row, col, value in updates]
-                    ws.update_cells(cell_updates)
+                # Process each order found
+                for order_idx, order_info in enumerate(all_orders_info):
+                    # Prepare values for this order
+                    geo_included_str = ', '.join([loc['name'] for loc in order_info.get('geo_included', [])]) if order_info.get('geo_included') else ''
+                    geo_excluded_str = ', '.join([loc['name'] for loc in order_info.get('geo_excluded', [])]) if order_info.get('geo_excluded') else ''
+                    order_id_str = str(order_info.get('order_id', '')) if order_info else ''
+                    order_name_str = order_info.get('order_name', '') if order_info else ''
+                    trafficker_str = order_info.get('trafficker_name', '') if order_info else ''
+                    creator_str = order_info.get('creator_name', '') if order_info else ''
+                    client_network = order_info.get('client_network', 'unknown')
                     
-                    print(f"[INFO] Updated row {i} with geo included: {geo_included_str}, geo excluded: {geo_excluded_str}, order ID: {order_id_str}, trafficker: {trafficker_str}, creator: {creator_str}")
+                    # If this is the first order, update the existing row
+                    if order_idx == 0:
+                        current_row = i
+                    else:
+                        # For additional orders, insert a new row after the current row
+                        current_row = i + order_idx
+                        # Insert a new row with the same data as the original row
+                        ws.insert_row([row.get(col, '') for col in header], current_row)
+                        print(f"[INFO] Inserted new row {current_row} for additional order")
                     
-                    # Rate limiting
-                    time.sleep(1.0)
+                    # Update all columns in one batch based on client network
+                    updates = []
+                    if geo_included_str:
+                        updates.append((current_row, geo_included_idx, geo_included_str))
+                    if geo_excluded_str:
+                        updates.append((current_row, geo_excluded_idx, geo_excluded_str))
+                    
+                    # Use appropriate columns based on client network
+                    if client_network == '23037861279':  # Client 1
+                        if order_id_str:
+                            updates.append((current_row, order_id_idx_1, order_id_str))
+                        if order_name_str:
+                            updates.append((current_row, order_name_idx_1, order_name_str))
+                        if trafficker_str:
+                            updates.append((current_row, trafficker_idx_1, trafficker_str))
+                        if creator_str:
+                            updates.append((current_row, creator_idx_1, creator_str))
+                    elif client_network == '7176':  # Client 2
+                        if order_id_str:
+                            updates.append((current_row, order_id_idx_2, order_id_str))
+                        if order_name_str:
+                            updates.append((current_row, order_name_idx_2, order_name_str))
+                        if trafficker_str:
+                            updates.append((current_row, trafficker_idx_2, trafficker_str))
+                        if creator_str:
+                            updates.append((current_row, creator_idx_2, creator_str))
+                    else:
+                        print(f"[WARNING] Unknown client network: {client_network}")
+                    
+                    if updates:
+                        # Convert to gspread format (row, col, value)
+                        cell_updates = [gspread.Cell(row, col, value) for row, col, value in updates]
+                        ws.update_cells(cell_updates)
+                        
+                        print(f"[INFO] Updated row {current_row} with order: {order_name_str} (Client: {client_network}), geo included: {geo_included_str}, geo excluded: {geo_excluded_str}, order ID: {order_id_str}, trafficker: {trafficker_str}, creator: {creator_str}")
+                        
+                        # Rate limiting
+                        time.sleep(1.0)
             
         except Exception as e:
             print(f"[ERROR] Processing row {i}: {e}")
