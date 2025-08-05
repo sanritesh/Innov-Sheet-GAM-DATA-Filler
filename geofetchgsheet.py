@@ -853,9 +853,6 @@ def process_sheet(ws):
                 # Get column indices
                 geo_included_idx = existing_columns.get(geo_included_col, -1) + 1
                 geo_excluded_idx = existing_columns.get(geo_excluded_col, -1) + 1
-                order_id_idx = existing_columns.get(order_id_col, -1) + 1
-                trafficker_idx = existing_columns.get(trafficker_col, -1) + 1
-                creator_idx = existing_columns.get(creator_col, -1) + 1
                 
                 # Check if all required columns exist
                 geo_included_idx = existing_columns.get(geo_included_col, -1) + 1
