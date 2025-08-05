@@ -274,8 +274,16 @@ result_cache = {}
 # For each campaign name, find matching active sponsorship order/line-item and fetch geo
 def is_active_sponsorship(li):
     try:
+        # Check if line item type is SPONSORSHIP
         if getattr(li, 'lineItemType', '') != 'SPONSORSHIP':
             return False
+        
+        # Check if line item status is not COMPLETED
+        line_item_status = getattr(li, 'status', '')
+        if line_item_status == 'COMPLETED':
+            print(f"[DEBUG] Skipping line item with COMPLETED status")
+            return False
+        
         start = getattr(li, 'startDateTime', None)
         end = getattr(li, 'endDateTime', None)
         if not start or not end:
@@ -315,11 +323,85 @@ def is_active_sponsorship(li):
         start_dt = datetime(start_year, start_month, start_day, start_hour, start_minute, start_second, tzinfo=tz)
         end_dt = datetime(end_year, end_month, end_day, end_hour, end_minute, end_second, tzinfo=tz)
         
-        # Check if line item is active for current date
+        # Get current date (date only, no time)
+        current_date = now.date()
+        start_date_only = start_dt.date()
+        end_date_only = end_dt.date()
+        
+        # Filter 1: Exclude if both start and end dates are in the past
+        if start_date_only < current_date and end_date_only < current_date:
+            print(f"[DEBUG] Skipping line item with past date range: start={start_date_only}, end={end_date_only} < {current_date}")
+            return False
+        
+        # Filter 2: Exclude if both start and end dates are current date or earlier
+        if start_date_only <= current_date and end_date_only <= current_date:
+            print(f"[DEBUG] Skipping line item with current/past date range: start={start_date_only}, end={end_date_only} <= {current_date}")
+            return False
+        
+        # Filter 3: Include if end date is T+1 or greater (multi-day CPD campaign)
+        if end_date_only > current_date:
+            print(f"[DEBUG] Including line item with future end date: start={start_date_only}, end={end_date_only} > {current_date}")
+            return True
+        
+        # Check if line item is active for current date (end date should be in future)
         return start_dt <= now <= end_dt
         
     except Exception as e:
         print(f"[ERROR] Checking active sponsorship: {e}")
+        return False
+
+def is_valid_order(order):
+    """Check if order is valid (not completed and has valid date range)"""
+    try:
+        # Check if order status is not COMPLETED
+        order_status = getattr(order, 'status', '')
+        if order_status == 'COMPLETED':
+            print(f"[DEBUG] Skipping order with COMPLETED status")
+            return False
+        
+        # Check order start and end dates (if available)
+        start = getattr(order, 'startDateTime', None)
+        end = getattr(order, 'endDateTime', None)
+        
+        if start and end:
+            start_date = getattr(start, 'date', None)
+            end_date = getattr(end, 'date', None)
+            
+            if start_date and end_date:
+                start_year = getattr(start_date, 'year', 0)
+                start_month = getattr(start_date, 'month', 0)
+                start_day = getattr(start_date, 'day', 0)
+                
+                end_year = getattr(end_date, 'year', 0)
+                end_month = getattr(end_date, 'month', 0)
+                end_day = getattr(end_date, 'day', 0)
+                
+                start_dt = datetime(start_year, start_month, start_day, 0, 0, 0, tzinfo=tz)
+                end_dt = datetime(end_year, end_month, end_day, 23, 59, 59, tzinfo=tz)
+                
+                current_date = now.date()
+                start_date_only = start_dt.date()
+                end_date_only = end_dt.date()
+                
+                # Check if both start and end dates are in the past
+                if start_date_only < current_date and end_date_only < current_date:
+                    print(f"[DEBUG] Skipping order with past date range: start={start_date_only}, end={end_date_only} < {current_date}")
+                    return False
+                
+                # Check if both start and end dates are current date or earlier
+                if start_date_only <= current_date and end_date_only <= current_date:
+                    print(f"[DEBUG] Skipping order with current/past date range: start={start_date_only}, end={end_date_only} <= {current_date}")
+                    return False
+                
+                # Include if end date is T+1 or greater (multi-day CPD campaign)
+                if end_date_only > current_date:
+                    print(f"[DEBUG] Including order with future end date: start={start_date_only}, end={end_date_only} > {current_date}")
+                    return True
+        
+        return True
+        
+    except Exception as e:
+        print(f"[ERROR] Checking order validity: {e}")
         return False
 
 def fetch_geo_for_search_string(search_string, clients):
@@ -354,6 +436,11 @@ def fetch_geo_for_search_string(search_string, clients):
                             print(f"[DEBUG] First order: {first_order}")
                             print(f"[DEBUG] First order type: {type(first_order)}")
                             
+                            # Check if order is valid (not completed, future start date)
+                            if not is_valid_order(first_order):
+                                print(f"[DEBUG] Skipping invalid order")
+                                continue
+                            
                             if hasattr(first_order, 'name'):
                                 order_name = first_order.name
                                 order_id = first_order.id
@@ -364,7 +451,7 @@ def fetch_geo_for_search_string(search_string, clients):
                                 print(f"[DEBUG] Unknown order structure: {first_order}")
                                 continue
                             
-                            print(f"[DEBUG] Found order: {order_name} (ID: {order_id})")
+                            print(f"[DEBUG] Found valid order: {order_name} (ID: {order_id})")
                         else:
                             print(f"[DEBUG] No results in OrderPage")
                             continue
@@ -492,6 +579,12 @@ def fetch_geo_for_search_string(search_string, clients):
                                 if orders and len(orders) > 0:
                                     if hasattr(orders, 'results') and orders.results:
                                         first_order = orders.results[0]
+                                        
+                                        # Check if order is valid (not completed, future start date)
+                                        if not is_valid_order(first_order):
+                                            print(f"[DEBUG] Skipping line item due to invalid order")
+                                            continue
+                                        
                                         order_info = {
                                             'order_id': first_order.id,
                                             'trafficker_id': first_order.traffickerId if hasattr(first_order, 'traffickerId') else None,
