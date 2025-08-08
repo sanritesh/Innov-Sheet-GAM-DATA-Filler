@@ -855,6 +855,10 @@ def process_sheet(ws):
                     # Update header length to reflect new grid size
                     header.extend([''] * (new_column_count - current_column_count))
                     
+                    # Refresh the header to get the actual current state
+                    header = ws.row_values(1)
+                    print(f"[INFO] Refreshed header, now has {len(header)} columns")
+                    
                 except Exception as e:
                     print(f"[ERROR] Failed to resize grid: {e}")
                     print(f"[ERROR] Cannot add {required_new_columns} new columns. Current columns: {current_column_count}")
@@ -1035,4 +1039,4 @@ def process_sheet(ws):
 for ws in sheets_to_update:
     process_sheet(ws)
 
-print(f"\n[DONE] All sheets processed successfully!") 
+print(f"\n[DONE] All sheets processed successfully!")
