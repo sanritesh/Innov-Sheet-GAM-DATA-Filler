@@ -823,13 +823,58 @@ def process_sheet(ws):
                 header[col_idx] = col
                 print(f"[INFO] Added '{col}' to existing empty column {col_idx + 1}")
         else:
+            # Check if we can add new columns at the end
+            current_column_count = len(header)
+            required_new_columns = len(missing_columns)
+            
+            # Try to resize the grid if we're at the limit
+            if current_column_count + required_new_columns > 26:
+                try:
+                    # Resize the grid to accommodate more columns
+                    new_column_count = current_column_count + required_new_columns + 5  # Add extra buffer
+                    print(f"[INFO] Resizing grid from {current_column_count} to {new_column_count} columns")
+                    
+                    # Get the spreadsheet object to resize
+                    spreadsheet = ws.spreadsheet
+                    spreadsheet.batch_update({
+                        'requests': [{
+                            'updateSheetProperties': {
+                                'properties': {
+                                    'sheetId': ws.id,
+                                    'gridProperties': {
+                                        'columnCount': new_column_count
+                                    }
+                                },
+                                'fields': 'gridProperties.columnCount'
+                            }
+                        }]
+                    })
+                    
+                    print(f"[INFO] Successfully resized grid to {new_column_count} columns")
+                    
+                    # Update header length to reflect new grid size
+                    header.extend([''] * (new_column_count - current_column_count))
+                    
+                except Exception as e:
+                    print(f"[ERROR] Failed to resize grid: {e}")
+                    print(f"[ERROR] Cannot add {required_new_columns} new columns. Current columns: {current_column_count}")
+                    print(f"[ERROR] Missing columns that need to be added: {missing_columns}")
+                    print(f"[ERROR] Please manually add these columns after the 'Placement' column in the sheet '{ws.title}'")
+                    print(f"[ERROR] Required columns: {missing_columns}")
+                    return
+            
             # Add new columns at the end
             current_end = len(header)
             for col in missing_columns:
-                ws.update_cell(1, current_end + 1, col)
-                header.append(col)
-                current_end += 1
-                print(f"[INFO] Added '{col}' as new column {current_end}")
+                try:
+                    ws.update_cell(1, current_end + 1, col)
+                    header.append(col)
+                    current_end += 1
+                    print(f"[INFO] Added '{col}' as new column {current_end}")
+                except Exception as e:
+                    print(f"[ERROR] Failed to add column '{col}': {e}")
+                    print(f"[ERROR] This might be due to sheet column limits. Please check the sheet '{ws.title}'")
+                    return
     
     # Update header indices for existing columns
     for col in required_columns:
