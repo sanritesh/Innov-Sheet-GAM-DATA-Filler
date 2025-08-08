@@ -161,7 +161,7 @@ def get_date_sheets(sh):
     return date_sheets
 
 def needs_updating(ws):
-    """Check if a sheet needs updating (geo columns are empty)"""
+    """Check if a sheet needs updating (has rows with empty geo columns)"""
     try:
         # Get all values from the sheet
         all_values = ws.get_all_values()
@@ -183,15 +183,31 @@ def needs_updating(ws):
         if geo_included_idx is None or geo_excluded_idx is None:
             return True
         
-        # Check if any rows have data in our columns
-        for row in all_values[1:]:  # Skip header
+        # Check if any rows have empty geo data
+        rows_needing_update = 0
+        for row_idx, row in enumerate(all_values[1:], start=2):  # Skip header, start from row 2
             if len(row) > max(geo_included_idx, geo_excluded_idx):
                 geo_included_val = str(row[geo_included_idx]).strip() if row[geo_included_idx] else ''
                 geo_excluded_val = str(row[geo_excluded_idx]).strip() if row[geo_excluded_idx] else ''
-                if geo_included_val or geo_excluded_val:
-                    return False  # Found data, sheet is already updated
+                
+                # Check if this row has a campaign name but empty geo data
+                campaign_name_idx = None
+                for i, col in enumerate(header):
+                    if col and col.strip() == 'Campaign Name':
+                        campaign_name_idx = i
+                        break
+                
+                if campaign_name_idx is not None and campaign_name_idx < len(row):
+                    campaign_name = str(row[campaign_name_idx]).strip() if row[campaign_name_idx] else ''
+                    if campaign_name and (not geo_included_val and not geo_excluded_val):
+                        rows_needing_update += 1
         
-        return True  # No data found in our columns
+        if rows_needing_update > 0:
+            print(f"[INFO] Sheet {ws.title} needs updating - {rows_needing_update} rows with empty geo data")
+            return True
+        else:
+            print(f"[INFO] Sheet {ws.title} is already complete - all rows have geo data")
+            return False
         
     except Exception as e:
         print(f"[ERROR] Checking if sheet needs updating: {e}")
@@ -1035,8 +1051,76 @@ def process_sheet(ws):
     
     print(f"[DONE] Completed processing sheet: {ws.title}")
 
-# Process all sheets that need updating
-for ws in sheets_to_update:
-    process_sheet(ws)
+def main():
+    """Main function to run the script"""
+    print("[INFO] Starting GAM Geo Fetch Script - INCREMENTAL UPDATE MODE")
+    print("[INFO] This script will only update rows with missing geo data, enabling hourly cron efficiency")
+    
+    # Setup Google Sheets
+    gc = setup_google_sheets()
+    if not gc:
+        print("[ERROR] Failed to setup Google Sheets. Exiting.")
+        return
+    
+    # Initialize GAM clients
+    clients = []
+    for yaml_file in GAM_YAMLS:
+        try:
+            if os.path.exists(yaml_file):
+                client = ad_manager.AdManagerClient.LoadFromStorage(yaml_file)
+                clients.append(client)
+                print(f"[INFO] Successfully loaded GAM client from {yaml_file}")
+            else:
+                print(f"[WARNING] YAML file not found: {yaml_file}")
+        except Exception as e:
+            print(f"[ERROR] Error loading GAM client from {yaml_file}: {e}")
+    
+    if not clients:
+        print("[ERROR] No GAM clients loaded. Cannot proceed.")
+        return
+    
+    # Open the spreadsheet
+    try:
+        sh = gc.open_by_key(SHEET_ID)
+        print(f"[INFO] Successfully connected to Google Sheet: {sh.title}")
+    except Exception as e:
+        print(f"[ERROR] Failed to open Google Sheet: {e}")
+        return
+    
+    # Find sheets that need updating
+    sheets_to_update = find_sheets_to_update(sh)
+    if not sheets_to_update:
+        print("[INFO] No sheets need updating. All data appears to be filled.")
+        print("[INFO] This is expected behavior for incremental updates - only missing data will be filled.")
+        return
+    
+    print(f"[INFO] Found {len(sheets_to_update)} sheets that need updating")
+    
+    # Track progress for this run
+    total_sheets_processed = 0
+    total_rows_updated = 0
+    start_time = datetime.now()
+    
+    # Process all sheets that need updating
+    for ws in sheets_to_update:
+        print(f"\n[INFO] Processing sheet: {ws.title}")
+        rows_needing_update = get_rows_needing_update(ws)
+        total_rows_updated += len(rows_needing_update)
+        total_sheets_processed += 1
+        
+        print(f"[INFO] Found {len(rows_needing_update)} rows needing update in sheet {ws.title}")
+        process_sheet(ws)
+    
+    # Calculate run statistics
+    end_time = datetime.now()
+    duration = end_time - start_time
+    
+    print(f"\n[DONE] All sheets processed successfully!")
+    print(f"[SUMMARY] Run completed in {duration.total_seconds():.1f} seconds")
+    print(f"[SUMMARY] Sheets processed: {total_sheets_processed}")
+    print(f"[SUMMARY] Total rows updated: {total_rows_updated}")
+    print(f"[SUMMARY] Incremental update complete - only missing data was filled")
+    print(f"[INFO] Next hourly run will continue filling any remaining empty rows")
 
-print(f"\n[DONE] All sheets processed successfully!")
+if __name__ == "__main__":
+    main() 
