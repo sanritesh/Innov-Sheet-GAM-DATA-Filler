@@ -214,26 +214,46 @@ def needs_updating(ws):
         return True  # Assume it needs updating if we can't check
 
 def find_sheets_to_update(sh):
-    """Find sheets that need updating from the last 5 date-based sheets"""
-    date_sheets = get_date_sheets(sh)
-    
-    if not date_sheets:
-        print("[WARNING] No date-based sheets found")
-        return []
-    
-    print(f"[INFO] Found {len(date_sheets)} date-based sheets")
-    
-    # Check the last 5 sheets (or all if less than 5)
-    sheets_to_check = date_sheets[:5]
+    """Find sheets that need updating (only future sheets, not today)"""
     sheets_to_update = []
     
-    for sheet, date in sheets_to_check:
-        print(f"[INFO] Checking sheet: {sheet.title} ({date.strftime('%B %-d')})")
-        if needs_updating(sheet):
-            print(f"[INFO] Sheet {sheet.title} needs updating")
-            sheets_to_update.append(sheet)
-        else:
-            print(f"[INFO] Sheet {sheet.title} already updated")
+    try:
+        # Get current date in IST
+        ist = pytz.timezone('Asia/Kolkata')
+        now = datetime.now(ist)
+        current_date = now.date()
+        
+        print(f"[DEBUG] Current date (IST): {current_date}")
+        
+        # Get all worksheets
+        worksheets = sh.worksheets()
+        
+        for ws in worksheets:
+            sheet_name = ws.title.strip()
+            print(f"[DEBUG] Checking sheet: '{sheet_name}'")
+            
+            # Try to parse the sheet name as a date
+            parsed_date = try_parse_date(sheet_name)
+            if parsed_date:
+                sheet_date = parsed_date.date()
+                print(f"[DEBUG]   Matched '{sheet_name}' -> {parsed_date} ({'future' if sheet_date > current_date else 'today' if sheet_date == current_date else 'past'})")
+                
+                # Only include FUTURE sheets (not today, not past)
+                if sheet_date > current_date:
+                    print(f"[DEBUG]   Including '{sheet_name}' (future date)")
+                    if needs_updating(ws):
+                        sheets_to_update.append(ws)
+                    else:
+                        print(f"[DEBUG]   Skipping '{sheet_name}' (already complete)")
+                else:
+                    print(f"[DEBUG]   Skipping '{sheet_name}' (not future date)")
+            else:
+                print(f"[DEBUG]   Skipping '{sheet_name}' (not a date-based sheet)")
+        
+        print(f"[DEBUG] Found {len(sheets_to_update)} future sheets that need updating")
+        
+    except Exception as e:
+        print(f"[ERROR] Finding sheets to update: {e}")
     
     return sheets_to_update
 
@@ -1051,6 +1071,51 @@ def process_sheet(ws):
     
     print(f"[DONE] Completed processing sheet: {ws.title}")
 
+def get_rows_needing_update(ws):
+    """Get list of row indices that need updating (have campaign names but empty geo data)"""
+    try:
+        # Get all values from the sheet
+        all_values = ws.get_all_values()
+        if not all_values or len(all_values) < 2:  # No data or only header
+            return []
+        
+        # Find our target columns
+        header = all_values[0]
+        geo_included_idx = None
+        geo_excluded_idx = None
+        campaign_name_idx = None
+        
+        for i, col in enumerate(header):
+            if col and col.strip() == 'geo included':
+                geo_included_idx = i
+            elif col and col.strip() == 'geo excluded':
+                geo_excluded_idx = i
+            elif col and col.strip() == 'Campaign Name':
+                campaign_name_idx = i
+        
+        # If our columns don't exist, all rows need updating
+        if geo_included_idx is None or geo_excluded_idx is None:
+            return list(range(2, len(all_values) + 1))  # All data rows
+        
+        # Check each row for empty geo data
+        rows_needing_update = []
+        for row_idx, row in enumerate(all_values[1:], start=2):  # Skip header, start from row 2
+            if len(row) > max(geo_included_idx, geo_excluded_idx):
+                geo_included_val = str(row[geo_included_idx]).strip() if row[geo_included_idx] else ''
+                geo_excluded_val = str(row[geo_excluded_idx]).strip() if row[geo_excluded_idx] else ''
+                
+                # Check if this row has a campaign name but empty geo data
+                if campaign_name_idx is not None and campaign_name_idx < len(row):
+                    campaign_name = str(row[campaign_name_idx]).strip() if row[campaign_name_idx] else ''
+                    if campaign_name and (not geo_included_val and not geo_excluded_val):
+                        rows_needing_update.append(row_idx)
+        
+        return rows_needing_update
+        
+    except Exception as e:
+        print(f"[ERROR] Getting rows needing update: {e}")
+        return []  # Return empty list if error
+
 def main():
     """Main function to run the script"""
     print("[INFO] Starting GAM Geo Fetch Script - INCREMENTAL UPDATE MODE")
@@ -1123,4 +1188,4 @@ def main():
     print(f"[INFO] Next hourly run will continue filling any remaining empty rows")
 
 if __name__ == "__main__":
-    main() 
+    main()
