@@ -828,7 +828,7 @@ def process_sheet(ws):
             required_new_columns = len(missing_columns)
             
             # Try to resize the grid if we're at the limit
-            if current_column_count + required_new_columns > 26:
+            if current_column_count + required_new_columns > len(header) or current_column_count + required_new_columns > 26:
                 try:
                     # Resize the grid to accommodate more columns
                     new_column_count = current_column_count + required_new_columns + 5  # Add extra buffer
