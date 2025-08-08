@@ -160,6 +160,49 @@ def get_date_sheets(sh):
     print(f"[DEBUG] Found {len(date_sheets)} date-based sheets (today and future)")
     return date_sheets
 
+def try_parse_date(sheet_name):
+    """Try to parse a sheet name as a date"""
+    try:
+        # Remove any extra whitespace
+        sheet_name = sheet_name.strip()
+        
+        # Try different date formats
+        date_formats = [
+            '%d %b',      # "8 Aug"
+            '%d %B',      # "8 August"
+            '%d-%m',      # "08-08"
+            '%d/%m',      # "08/08"
+            '%Y-%m-%d',   # "2025-08-08"
+            '%d %b %Y',   # "8 Aug 2025"
+            '%d %B %Y',   # "8 August 2025"
+        ]
+        
+        for fmt in date_formats:
+            try:
+                # Try parsing with current year if year not specified
+                if '%Y' not in fmt:
+                    # Add current year to the format
+                    test_date = datetime.strptime(sheet_name, fmt)
+                    # Set to current year
+                    current_year = datetime.now().year
+                    test_date = test_date.replace(year=current_year)
+                else:
+                    test_date = datetime.strptime(sheet_name, fmt)
+                
+                # Convert to IST timezone
+                ist = pytz.timezone('Asia/Kolkata')
+                test_date = ist.localize(test_date)
+                
+                return test_date
+            except ValueError:
+                continue
+        
+        return None
+        
+    except Exception as e:
+        print(f"[DEBUG] Error parsing date from '{sheet_name}': {e}")
+        return None
+
 def needs_updating(ws):
     """Check if a sheet needs updating (has rows with empty geo columns)"""
     try:
@@ -1188,4 +1231,4 @@ def main():
     print(f"[INFO] Next hourly run will continue filling any remaining empty rows")
 
 if __name__ == "__main__":
-    main()
+    main() 
