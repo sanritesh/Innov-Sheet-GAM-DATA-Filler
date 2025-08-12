@@ -9,6 +9,15 @@ DUPLICATE ROW PREVENTION:
 - Both client networks (23037861279 and 7176) order information is filled in the same row
 - Eliminates duplicate campaign rows while maintaining data from all GAM clients
 
+COLUMN STRUCTURE:
+- Client 23037861279: Order ID, Order Name, Trafficker (Creator removed)
+- Client 7176: Order ID, Order Name (Trafficker and Creator removed)
+
+GEO DATA PRIORITY:
+- Geo data (geo included/excluded) is ALWAYS fetched from client 23037861279 first
+- Other clients are only used for order information if client 23037861279 doesn't have geo data
+- Ensures consistent geo targeting information from primary GAM account
+
 Author: Ritesh Sanjay
 """
 
@@ -654,8 +663,102 @@ def fetch_geo_for_search_string(search_string, clients, package_id=None, row_num
     """Fetch geo information for all valid orders matching the search string"""
     all_orders_info = []  # List to store multiple order information
     
+    # PRIORITIZE: Process client 23037861279 first for geo data
+    prioritized_clients = []
+    other_clients = []
+    
     for client in clients:
+        client_network = str(getattr(client, 'network_code', 'unknown'))
+        if client_network == '23037861279':
+            prioritized_clients.append(client)
+        else:
+            other_clients.append(client)
+    
+    # Process prioritized client first (23037861279)
+    for client in prioritized_clients:
         try:
+            print(f"[INFO] Processing prioritized client {client_network} first for geo data")
+            # Try to find orders containing the search string
+            order_service = client.GetService('OrderService', version='v202411')
+            statement = ad_manager.StatementBuilder().Where('name LIKE :search_string').WithBindVariable('search_string', f'%{search_string}%')
+            
+            response = order_service.getOrdersByStatement(statement.ToStatement())
+            orders = response['results'] if 'results' in response else []
+            
+            print(f"[DEBUG] Search for '{search_string}' returned {len(orders)} orders")
+            
+            if orders and len(orders) > 0:
+                print(f"[DEBUG] Found {len(orders)} orders, processing all valid ones")
+                
+                for order in orders:
+                    print(f"[DEBUG] Processing order: {order}")
+                    print(f"[DEBUG] Order type: {type(order)}")
+                    
+                    if not is_valid_order(order):
+                        print(f"[DEBUG] Skipping invalid order")
+                        continue
+                    
+                    order_name = order['name']
+                    order_id = order['id']
+                    print(f"[DEBUG] Found valid order: {order_name} (ID: {order_id})")
+                    
+                    # Add Package ID validation check
+                    if package_id and package_id.strip():
+                        if package_id.strip() not in order_name:
+                            print(f"[DEBUG] Skipping order '{order_name}' - Package ID '{package_id}' not found in order name")
+                            continue
+                        else:
+                            print(f"[DEBUG] Order '{order_name}' contains Package ID '{package_id}' - proceeding")
+                    
+                    # Process this order and get its information
+                    order_info = process_single_order(order, client, order_name, order_id)
+                    if order_info:
+                        all_orders_info.append(order_info)
+                
+                if all_orders_info:
+                    print(f"[INFO] Found geo data from prioritized client {client_network}, returning early")
+                    return all_orders_info
+            
+            # If no orders found, try line item search
+            print(f"[DEBUG] No orders found containing '{search_string}', trying direct line item search...")
+            
+            line_item_service = client.GetService('LineItemService', version='v202411')
+            statement = ad_manager.StatementBuilder().Where('name LIKE :search_string').WithBindVariable('search_string', f'%{search_string}%')
+            
+            response = line_item_service.getLineItemsByStatement(statement.ToStatement())
+            line_items = response['results'] if 'results' in response else []
+            
+            print(f"[DEBUG] Search for '{search_string}' returned {len(line_items)} line items")
+            
+            if line_items and len(line_items) > 0:
+                for line_item in line_items:
+                    if is_active_sponsorship(line_item):
+                        # Get the order for this line item
+                        order_id = line_item['orderId']
+                        order = order_service.getOrdersByStatement(
+                            ad_manager.StatementBuilder().Where('id = :order_id').WithBindVariable('order_id', order_id).ToStatement()
+                        )['results'][0]
+                        
+                        if is_valid_order(order):
+                            order_name = order['name']
+                            order_info = process_single_order(order, client, order_name, order_id)
+                            if order_info:
+                                all_orders_info.append(order_info)
+                
+                if all_orders_info:
+                    print(f"[INFO] Found geo data from prioritized client {client_network}, returning early")
+                    return all_orders_info
+        
+        except Exception as e:
+            print(f"[ERROR] Error processing prioritized client {client_network}: {e}")
+            continue
+    
+    # If prioritized client didn't find geo data, try other clients for order information only
+    print(f"[INFO] No geo data found from prioritized client, trying other clients for order information")
+    for client in other_clients:
+        try:
+            client_network = str(getattr(client, 'network_code', 'unknown'))
+            print(f"[INFO] Processing client {client_network} for order information")
             # Try to find orders containing the search string
             order_service = client.GetService('OrderService', version='v202411')
             statement = ad_manager.StatementBuilder().Where('name LIKE :search_string').WithBindVariable('search_string', f'%{search_string}%')
@@ -726,7 +829,7 @@ def fetch_geo_for_search_string(search_string, clients, package_id=None, row_num
                     return all_orders_info
         
         except Exception as e:
-            print(f"[ERROR] Error processing client {client}: {e}")
+            print(f"[ERROR] Error processing client {client_network}: {e}")
             continue
     
     # If we get here, no data was found - add to pending notifications
@@ -810,13 +913,12 @@ def process_sheet(ws):
     order_id_col_1 = 'Order ID (23037861279)'
     order_name_col_1 = 'Order Name (23037861279)'
     trafficker_col_1 = 'Trafficker (23037861279)'
-    creator_col_1 = 'Creator (23037861279)'
+    # Note: Creator column removed for client 23037861279
     
     # Client 2 (Network 7176) columns
     order_id_col_2 = 'Order ID (7176)'
     order_name_col_2 = 'Order Name (7176)'
-    trafficker_col_2 = 'Trafficker (7176)'
-    creator_col_2 = 'Creator (7176)'
+    # Note: Trafficker and Creator columns removed for client 7176
     
     header = ws.row_values(1)
     
@@ -845,8 +947,8 @@ def process_sheet(ws):
     # Define the columns we need to add
     required_columns = [
         geo_included_col, geo_excluded_col,
-        order_id_col_1, order_name_col_1, trafficker_col_1, creator_col_1,
-        order_id_col_2, order_name_col_2, trafficker_col_2, creator_col_2
+        order_id_col_1, order_name_col_1, trafficker_col_1,
+        order_id_col_2, order_name_col_2
     ]
     
     # Check which columns already exist
@@ -989,15 +1091,14 @@ def process_sheet(ws):
                 order_id_idx_1 = existing_columns.get(order_id_col_1, -1) + 1
                 order_name_idx_1 = existing_columns.get(order_name_col_1, -1) + 1
                 trafficker_idx_1 = existing_columns.get(trafficker_col_1, -1) + 1
-                creator_idx_1 = existing_columns.get(creator_col_1, -1) + 1
+                # Note: Creator column removed for client 23037861279
                 
                 # Client 2 columns
                 order_id_idx_2 = existing_columns.get(order_id_col_2, -1) + 1
                 order_name_idx_2 = existing_columns.get(order_name_col_2, -1) + 1
-                trafficker_idx_2 = existing_columns.get(trafficker_col_2, -1) + 1
-                creator_idx_2 = existing_columns.get(creator_col_2, -1) + 1
+                # Note: Trafficker and Creator columns removed for client 7176
                 
-                if -1 in [geo_included_idx, geo_excluded_idx, order_id_idx_1, order_name_idx_1, trafficker_idx_1, creator_idx_1, order_id_idx_2, order_name_idx_2, trafficker_idx_2, creator_idx_2]:
+                if -1 in [geo_included_idx, geo_excluded_idx, order_id_idx_1, order_name_idx_1, trafficker_idx_1, order_id_idx_2, order_name_idx_2]:
                     print(f"[ERROR] Some required columns are missing in sheet {ws.title}")
                     continue
                 
@@ -1046,21 +1147,17 @@ def process_sheet(ws):
                             all_cell_updates.append(gspread.Cell(current_row, order_name_idx_1, order_name_str))
                         if trafficker_str:
                             all_cell_updates.append(gspread.Cell(current_row, trafficker_idx_1, trafficker_str))
-                        if creator_str:
-                            all_cell_updates.append(gspread.Cell(current_row, creator_idx_1, creator_str))
+                        # Note: Creator column removed for client 23037861279
                     elif client_network == '7176':  # Client 2
                         if order_id_str:
                             all_cell_updates.append(gspread.Cell(current_row, order_id_idx_2, order_id_str))
                         if order_name_str:
                             all_cell_updates.append(gspread.Cell(current_row, order_name_idx_2, order_name_str))
-                        if trafficker_str:
-                            all_cell_updates.append(gspread.Cell(current_row, trafficker_idx_2, trafficker_str))
-                        if creator_str:
-                            all_cell_updates.append(gspread.Cell(current_row, creator_idx_2, creator_str))
+                        # Note: Trafficker and Creator columns removed for client 7176
                     else:
                         print(f"[WARNING] Unknown client network: {client_network}")
                     
-                    print(f"[INFO] Prepared updates for row {current_row} with order: {order_name_str} (Client: {client_network}), geo included: {geo_included_str}, geo excluded: {geo_excluded_str}, order ID: {order_id_str}, trafficker: {trafficker_str}, creator: {creator_str}")
+                    print(f"[INFO] Prepared updates for row {current_row} with order: {order_name_str} (Client: {client_network}), geo included: {geo_included_str}, geo excluded: {geo_excluded_str}, order ID: {order_id_str}, trafficker: {trafficker_str}")
                 
                 # Batch update all cells for this campaign
                 if all_cell_updates:
