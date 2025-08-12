@@ -1,3 +1,17 @@
+"""
+GAM Geo Fetch Script - Main Version
+
+This script fetches geo targeting information from Google Ad Manager (GAM) and updates Google Sheets.
+
+DUPLICATE ROW PREVENTION:
+- FIXED: Script now keeps ONE row per campaign instead of creating multiple rows
+- Data from BOTH GAM clients is preserved and merged into the same row
+- Both client networks (23037861279 and 7176) order information is filled in the same row
+- Eliminates duplicate campaign rows while maintaining data from all GAM clients
+
+Author: Ritesh Sanjay
+"""
+
 import os
 import json
 import gspread
@@ -7,6 +21,46 @@ from datetime import datetime, timedelta
 import pytz
 import time
 import re
+
+# Global variables for tracking pending configurations
+pending_configurations = []
+processed_campaigns = []
+
+def add_pending_notification(campaign_name, package_id, row_number, reason):
+    """Add a campaign to the pending configuration list"""
+    pending_configurations.append({
+        'campaign_name': campaign_name,
+        'package_id': package_id,
+        'row_number': row_number,
+        'reason': reason,
+        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    })
+
+def print_pending_notifications():
+    """Print a summary of campaigns pending configuration"""
+    if not pending_configurations:
+        print(f"\n[INFO] No campaigns pending configuration - all campaigns are properly set up in GAM!")
+        return
+    
+    print(f"\n[PENDING CONFIGURATION] Found {len(pending_configurations)} campaigns that need AdOps attention:")
+    print("=" * 80)
+    
+    # Group by reason for better reporting
+    by_reason = {}
+    for item in pending_configurations:
+        reason = item['reason']
+        if reason not in by_reason:
+            by_reason[reason] = []
+        by_reason[reason].append(item)
+    
+    for reason, items in by_reason.items():
+        print(f"\n📋 {reason.upper()} ({len(items)} campaigns):")
+        for item in items:
+            print(f"   • Row {item['row_number']}: {item['campaign_name']} (Package ID: {item['package_id']})")
+    
+    print("\n" + "=" * 80)
+    print(f"[ADVICE] Please configure these campaigns in GAM to enable geo data fetching")
+    print(f"[ADVICE] Next hourly run will automatically pick up newly configured campaigns")
 
 # Google Sheets setup
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
@@ -596,178 +650,94 @@ def process_single_order(order, client, order_name, order_id):
         print(f"[ERROR] Processing single order: {e}")
         return None
 
-def fetch_geo_for_search_string(search_string, clients, package_id=None):
+def fetch_geo_for_search_string(search_string, clients, package_id=None, row_number=None):
     """Fetch geo information for all valid orders matching the search string"""
     all_orders_info = []  # List to store multiple order information
     
     for client in clients:
         try:
-            print(f"[DEBUG] Trying client with network code: {client.network_code}")
-            
-            # First try to find orders containing the search string
+            # Try to find orders containing the search string
             order_service = client.GetService('OrderService', version='v202411')
-            print(f"[DEBUG] Using OrderService with v202411")
-            
             statement = ad_manager.StatementBuilder().Where('name LIKE :search_string').WithBindVariable('search_string', f'%{search_string}%')
-            orders = order_service.getOrdersByStatement(statement.ToStatement())
             
-            print(f"[DEBUG] Search for '{search_string}' returned {len(orders) if orders else 0} orders")
+            response = order_service.getOrdersByStatement(statement.ToStatement())
+            orders = response['results'] if 'results' in response else []
+            
+            print(f"[DEBUG] Search for '{search_string}' returned {len(orders)} orders")
             
             if orders and len(orders) > 0:
-                try:
-                    print(f"[DEBUG] Orders structure: {type(orders)}")
-                    print(f"[DEBUG] Orders length: {len(orders)}")
+                print(f"[DEBUG] Found {len(orders)} orders, processing all valid ones")
+                
+                for order in orders:
+                    print(f"[DEBUG] Processing order: {order}")
+                    print(f"[DEBUG] Order type: {type(order)}")
                     
-                    # For OrderPage objects, we need to access the results differently
-                    if hasattr(orders, 'results'):
-                        # Try to access the results attribute
-                        order_results = orders.results
-                        if order_results and len(order_results) > 0:
-                            print(f"[DEBUG] Found {len(order_results)} orders, processing all valid ones")
-                            
-                            # Process all orders, not just the first one
-                            for order in order_results:
-                                print(f"[DEBUG] Processing order: {order}")
-                                print(f"[DEBUG] Order type: {type(order)}")
-                                
-                                # Check if order is valid (not completed, future start date)
-                                if not is_valid_order(order):
-                                    print(f"[DEBUG] Skipping invalid order")
-                                    continue
-                                
-                                if hasattr(order, 'name'):
-                                    order_name = order.name
-                                    order_id = order.id
-                                elif isinstance(order, dict):
-                                    order_name = order.get('name', 'Unknown')
-                                    order_id = order.get('id', 'Unknown')
-                                else:
-                                    print(f"[DEBUG] Unknown order structure: {order}")
-                                    continue
-                                
-                                print(f"[DEBUG] Found valid order: {order_name} (ID: {order_id})")
-                                
-                                # Add Package ID validation check
-                                if package_id and package_id.strip():
-                                    if package_id.strip() not in order_name:
-                                        print(f"[DEBUG] Skipping order '{order_name}' - Package ID '{package_id}' not found in order name")
-                                        continue
-                                    else:
-                                        print(f"[DEBUG] Order '{order_name}' contains Package ID '{package_id}' - proceeding")
-                                
-                                # Process this order and get its information
-                                order_info = process_single_order(order, client, order_name, order_id)
-                                if order_info:
-                                    all_orders_info.append(order_info)
-                        else:
-                            print(f"[DEBUG] No results in OrderPage")
-                            continue
-                    else:
-                        print(f"[DEBUG] Orders object has no 'results' attribute: {orders}")
+                    if not is_valid_order(order):
+                        print(f"[DEBUG] Skipping invalid order")
                         continue
-                except Exception as e:
-                    print(f"[DEBUG] Error accessing order details: {e}")
-                    print(f"[DEBUG] Full error: {type(e).__name__}: {str(e)}")
-                    continue
+                    
+                    order_name = order['name']
+                    order_id = order['id']
+                    print(f"[DEBUG] Found valid order: {order_name} (ID: {order_id})")
+                    
+                    # Add Package ID validation check
+                    if package_id and package_id.strip():
+                        if package_id.strip() not in order_name:
+                            print(f"[DEBUG] Skipping order '{order_name}' - Package ID '{package_id}' not found in order name")
+                            continue
+                        else:
+                            print(f"[DEBUG] Order '{order_name}' contains Package ID '{package_id}' - proceeding")
+                    
+                    # Process this order and get its information
+                    order_info = process_single_order(order, client, order_name, order_id)
+                    if order_info:
+                        all_orders_info.append(order_info)
+                
+                if all_orders_info:
+                    return all_orders_info
             
-            # If no orders found, try direct line item search
+            # If no orders found, try line item search
             print(f"[DEBUG] No orders found containing '{search_string}', trying direct line item search...")
+            
             line_item_service = client.GetService('LineItemService', version='v202411')
-            print(f"[DEBUG] Using LineItemService with v202411")
-            
             statement = ad_manager.StatementBuilder().Where('name LIKE :search_string').WithBindVariable('search_string', f'%{search_string}%')
-            line_items = line_item_service.getLineItemsByStatement(statement.ToStatement())
             
-            print(f"[DEBUG] Search for '{search_string}' returned {len(line_items) if line_items else 0} line items")
+            response = line_item_service.getLineItemsByStatement(statement.ToStatement())
+            line_items = response['results'] if 'results' in response else []
+            
+            print(f"[DEBUG] Search for '{search_string}' returned {len(line_items)} line items")
             
             if line_items and len(line_items) > 0:
-                # Access the results array from LineItemPage
-                if hasattr(line_items, 'results'):
-                    line_item_results = line_items.results
-                else:
-                    line_item_results = line_items
-                
-                for li in line_item_results:
-                    try:
-                        if hasattr(li, 'name'):
-                            li_name = li.name
-                            li_type = li.lineItemType
-                        elif isinstance(li, dict):
-                            li_name = li.get('name', 'Unknown')
-                            li_type = li.get('lineItemType', 'Unknown')
-                        else:
-                            print(f"[DEBUG]   Unknown line item structure: {li}")
-                            continue
+                for line_item in line_items:
+                    if is_active_sponsorship(line_item):
+                        # Get the order for this line item
+                        order_id = line_item['orderId']
+                        order = order_service.getOrdersByStatement(
+                            ad_manager.StatementBuilder().Where('id = :order_id').WithBindVariable('order_id', order_id).ToStatement()
+                        )['results'][0]
                         
-                        print(f"[DEBUG]   Line item: {li_name}, type: {li_type}")
-                        
-                        if is_active_sponsorship(li):
-                            print(f"[DEBUG]     Line item is active and of type SPONSORSHIP")
-                            geo = extract_geo(li)
-                            all_included.extend(geo['included'])
-                            all_excluded.extend(geo['excluded'])
-                            
-                            # Get order info for this line item
-                            order_id = li.orderId if hasattr(li, 'orderId') else None
-                            if order_id:
-                                order_statement = ad_manager.StatementBuilder().Where('id = :order_id').WithBindVariable('order_id', order_id)
-                                orders = order_service.getOrdersByStatement(order_statement.ToStatement())
-                                if orders and len(orders) > 0:
-                                    if hasattr(orders, 'results') and orders.results:
-                                        first_order = orders.results[0]
-                                        
-                                        # Check if order is valid (not completed, future start date)
-                                        if not is_valid_order(first_order):
-                                            print(f"[DEBUG] Skipping line item due to invalid order")
-                                            continue
-                                        
-                                        order_info = {
-                                            'order_id': first_order.id,
-                                            'client_network': client_network,
-                                            'trafficker_id': first_order.traffickerId if hasattr(first_order, 'traffickerId') else None,
-                                            'creator_id': first_order.creatorId if hasattr(first_order, 'creatorId') else None
-                                        }
-                                        
-                                        # Get trafficker and creator names
-                                        try:
-                                            user_service = client.GetService('UserService', version='v202411')
-                                            if order_info['trafficker_id']:
-                                                trafficker_statement = ad_manager.StatementBuilder().Where('id = :user_id').WithBindVariable('user_id', order_info['trafficker_id'])
-                                                trafficker_users = user_service.getUsersByStatement(trafficker_statement.ToStatement())
-                                                if trafficker_users and len(trafficker_users) > 0:
-                                                    if hasattr(trafficker_users, 'results') and trafficker_users.results:
-                                                        order_info['trafficker_name'] = trafficker_users.results[0].name
-                                            
-                                            if order_info['creator_id']:
-                                                creator_statement = ad_manager.StatementBuilder().Where('id = :user_id').WithBindVariable('user_id', order_info['creator_id'])
-                                                creator_users = user_service.getUsersByStatement(creator_statement.ToStatement())
-                                                if creator_users and len(creator_users) > 0:
-                                                    if hasattr(creator_users, 'results') and creator_users.results:
-                                                        order_info['creator_name'] = creator_users.results[0].name
-                                        except Exception as e:
-                                            print(f"[ERROR] Getting user names: {e}")
-                            
-                            print(f"[DEBUG]     Geo included: {geo['included']}, Geo excluded: {geo['excluded']}")
-                            
-                            # Add order name to the order info
-                            order_info['order_name'] = first_order.name if hasattr(first_order, 'name') else 'Unknown'
-                            order_info['geo_included'] = geo['included']
-                            order_info['geo_excluded'] = geo['excluded']
-                            
-                            all_orders_info.append(order_info)
-                            return all_orders_info
-                        else:
-                            print(f"[DEBUG]     Line item is NOT active or not SPONSORSHIP")
-                    except Exception as e:
-                        print(f"[DEBUG] Error processing line item: {e}")
-                        continue
-            else:
-                print(f"[DEBUG] No line items found containing '{search_string}' in any GAM account")
+                        if is_valid_order(order):
+                            order_name = order['name']
+                            order_info = process_single_order(order, client, order_name, order_id)
+                            if order_info:
+                                all_orders_info.append(order_info)
                 
+                if all_orders_info:
+                    return all_orders_info
+        
         except Exception as e:
-            print(f"[ERROR] Processing client: {e}")
-            print(f"[DEBUG] Full error details: {type(e).__name__}: {str(e)}")
+            print(f"[ERROR] Error processing client {client}: {e}")
             continue
+    
+    # If we get here, no data was found - add to pending notifications
+    if row_number and package_id:
+        add_pending_notification(
+            campaign_name=search_string,
+            package_id=package_id,
+            row_number=row_number,
+            reason="Campaign not found in GAM"
+        )
+        print(f"[PENDING] Campaign '{search_string}' (Package ID: {package_id}) not found in GAM - needs AdOps configuration")
     
     return all_orders_info
 
@@ -995,12 +965,12 @@ def process_sheet(ws):
                 all_orders_info = result_cache[cache_key]
             else:
                 # Try to find geo using campaign name
-                all_orders_info = fetch_geo_for_search_string(campaign_name, clients, package_id)
+                all_orders_info = fetch_geo_for_search_string(campaign_name, clients, package_id, i)
                 
                 # If no orders found, try using Expresso ID
                 if not all_orders_info and expresso_id:
                     print(f"[INFO] No orders found for campaign, trying Expresso ID: {expresso_id}")
-                    all_orders_info = fetch_geo_for_search_string(str(expresso_id), clients, package_id)
+                    all_orders_info = fetch_geo_for_search_string(str(expresso_id), clients, package_id, i)
                 
                 # Cache the results
                 result_cache[cache_key] = all_orders_info
@@ -1034,8 +1004,25 @@ def process_sheet(ws):
                 # Collect all updates for this sheet to batch them
                 all_cell_updates = []
                 
-                # Process each order found
-                for order_idx, order_info in enumerate(all_orders_info):
+                # Process each order found - FIXED: Keep one row per campaign, fill both client columns
+                current_row = i  # Always use the same row for all orders of the same campaign
+                
+                # MERGE CLIENT DATA: Keep data from both GAM clients but prevent duplicate rows
+                # Group orders by client network to merge information from both clients
+                client_orders = {}
+                for order_info in all_orders_info:
+                    client_network = order_info.get('client_network', 'unknown')
+                    if client_network not in client_orders:
+                        client_orders[client_network] = order_info
+                    else:
+                        # If multiple orders for same client, keep the first one
+                        print(f"[INFO] Multiple orders found for client {client_network}, keeping first one")
+                
+                print(f"[INFO] Campaign '{campaign_name}' has {len(all_orders_info)} total orders from {len(client_orders)} GAM clients")
+                print(f"[INFO] GAM Clients found: {list(client_orders.keys())}")
+                
+                # Process orders from all GAM clients to fill both client columns in the same row
+                for order_idx, (client_network, order_info) in enumerate(client_orders.items()):
                     # Prepare values for this order
                     geo_included_str = ', '.join([loc['name'] for loc in order_info.get('geo_included', [])]) if order_info.get('geo_included') else ''
                     geo_excluded_str = ', '.join([loc['name'] for loc in order_info.get('geo_excluded', [])]) if order_info.get('geo_excluded') else ''
@@ -1043,23 +1030,7 @@ def process_sheet(ws):
                     order_name_str = order_info.get('order_name', '') if order_info else ''
                     trafficker_str = order_info.get('trafficker_name', '') if order_info else ''
                     creator_str = order_info.get('creator_name', '') if order_info else ''
-                    client_network = str(order_info.get('client_network', 'unknown'))
-                    
-                    # If this is the first order, update the existing row
-                    if order_idx == 0:
-                        current_row = i
-                    else:
-                        # For additional orders, only add new row if order name is different
-                        previous_order_name = all_orders_info[order_idx - 1].get('order_name', '')
-                        if order_name_str != previous_order_name:
-                            # Insert a new row with the same data as the original row
-                            current_row = i + order_idx
-                            ws.insert_row([row.get(col, '') for col in header], current_row)
-                            print(f"[INFO] Inserted new row {current_row} for different order: {order_name_str}")
-                        else:
-                            # Use the same row for orders with same name
-                            current_row = i + order_idx - 1
-                            print(f"[INFO] Using existing row {current_row} for duplicate order name: {order_name_str}")
+                    # client_network is already available from the loop iteration
                     
                     # Collect updates for this order based on client network
                     if geo_included_str:
@@ -1229,6 +1200,9 @@ def main():
     print(f"[SUMMARY] Total rows updated: {total_rows_updated}")
     print(f"[SUMMARY] Incremental update complete - only missing data was filled")
     print(f"[INFO] Next hourly run will continue filling any remaining empty rows")
+    
+    # Print pending configuration notifications
+    print_pending_notifications()
 
 if __name__ == "__main__":
-    main() 
+    main()
