@@ -23,8 +23,8 @@ This project provides a Python script to fetch geo-targeting information from Go
 
 1. **Clone the repository**
    ```bash
-   git clone <your-bitbucket-repo-url>
-   cd Custom_API_GAM_CPD
+   git clone <your-github-repo-url>
+   cd Innov-Sheet-GAM-DATA-Filler
    ```
 
 2. **Install dependencies**
@@ -193,8 +193,51 @@ For issues and questions:
 3. Create an issue in the repository
 4. Contact the development team
 
+## 🔄 CI/CD - GitHub Actions
+
+This project uses GitHub Actions for automated execution. The workflow runs on:
+- Push to `main` branch
+- Pull requests to `main`
+- Manual trigger (workflow_dispatch)
+- Optionally on a schedule (uncomment in workflow file)
+
+### Setting Up GitHub Actions
+
+1. **Add Repository Secrets** (Settings → Secrets and variables → Actions → Secrets):
+
+   | Secret Name | Description |
+   |-------------|-------------|
+   | `GOOGLE_SERVICE_ACCOUNT_JSON` | Full JSON content of your service account key |
+   | `GOOGLE_CLIENT_ID` | GAM OAuth client ID |
+   | `GOOGLE_CLIENT_SECRET` | GAM OAuth client secret |
+   | `GOOGLE_REFRESH_TOKEN` | GAM OAuth refresh token |
+
+2. **Add Repository Variables** (Settings → Secrets and variables → Actions → Variables):
+
+   | Variable Name | Description | Example |
+   |---------------|-------------|---------|
+   | `GOOGLE_SHEET_ID` | Target Google Sheet ID | `1Qx1GhhGUGM_3FWLDM04ygyAezUO2Zf6C4SlhG1h7IQA` |
+   | `GAM_NETWORK_CODES` | Comma-separated GAM network codes | `7176,23037861279` |
+   | `EXCLUDE_SUBSTRINGS` | Substrings to exclude | `ETCIO,ETBRANDEQUITY` |
+   | `EXCLUDE_PLATFORMS` | Platforms to exclude | `App` |
+
+3. **Manual Execution**:
+   - Go to Actions tab → "Run GAM Geo Fetch Script"
+   - Click "Run workflow" button
+   - Select branch and run
+
+4. **Enable Scheduled Runs** (optional):
+   - Edit `.github/workflows/gam-geo-fetch.yml`
+   - Uncomment the `schedule` section
+   - Adjust cron expression as needed
+
+### Testing Variables
+
+Use the "Run workflow" button with manual trigger to run the `test-variables` job, which verifies your secrets and variables are configured correctly.
+
 ## 🔄 Version History
 
+- **v1.1.0**: Added GitHub Actions support
 - **v1.0.0**: Initial release with GAM v202411 API support
 - Added multi-account GAM support
 - Implemented smart caching

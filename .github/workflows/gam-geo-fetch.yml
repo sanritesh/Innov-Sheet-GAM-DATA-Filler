@@ -1,0 +1,99 @@
+name: Run GAM Geo Fetch Script
+
+on:
+  # Run on push to main branch
+  push:
+    branches:
+      - main
+
+  # Run on pull requests
+  pull_request:
+    branches:
+      - main
+
+  # Allow manual trigger
+  workflow_dispatch:
+
+  # Optional: Run on a schedule (e.g., daily at 6 AM UTC)
+  # Uncomment the lines below to enable scheduled runs
+  # schedule:
+  #   - cron: '0 6 * * *'
+
+jobs:
+  run-gam-script:
+    name: Run GAM Geo Fetch Script
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.9
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          echo "Dependencies installed successfully"
+
+      - name: Create service account JSON file
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [ -n "$GOOGLE_SERVICE_ACCOUNT_JSON" ]; then
+            echo "$GOOGLE_SERVICE_ACCOUNT_JSON" > service-account.json
+            echo "Service account JSON created from environment variable"
+          else
+            echo "Warning: GOOGLE_SERVICE_ACCOUNT_JSON not set"
+          fi
+
+      - name: Generate YAML configuration files
+        env:
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+        run: python generate_yaml.py
+
+      - name: Run GAM Geo Fetch Script
+        env:
+          GOOGLE_SHEET_ID: ${{ vars.GOOGLE_SHEET_ID }}
+          GAM_NETWORK_CODES: ${{ vars.GAM_NETWORK_CODES }}
+          EXCLUDE_SUBSTRINGS: ${{ vars.EXCLUDE_SUBSTRINGS }}
+          EXCLUDE_PLATFORMS: ${{ vars.EXCLUDE_PLATFORMS }}
+        run: python geofetchgsheet.py
+
+      - name: Upload logs as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs
+          path: logs/
+          if-no-files-found: ignore
+
+  test-variables:
+    name: Test Repository Variables
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+
+    steps:
+      - name: Test repository variables
+        env:
+          GOOGLE_SHEET_ID: ${{ vars.GOOGLE_SHEET_ID }}
+          GAM_NETWORK_CODES: ${{ vars.GAM_NETWORK_CODES }}
+          EXCLUDE_SUBSTRINGS: ${{ vars.EXCLUDE_SUBSTRINGS }}
+          EXCLUDE_PLATFORMS: ${{ vars.EXCLUDE_PLATFORMS }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          echo "Testing repository variables..."
+          echo "GOOGLE_SHEET_ID: $GOOGLE_SHEET_ID"
+          echo "GAM_NETWORK_CODES: $GAM_NETWORK_CODES"
+          echo "EXCLUDE_SUBSTRINGS: $EXCLUDE_SUBSTRINGS"
+          echo "EXCLUDE_PLATFORMS: $EXCLUDE_PLATFORMS"
+          if [ -n "$GOOGLE_SERVICE_ACCOUNT_JSON" ]; then
+            echo "GOOGLE_SERVICE_ACCOUNT_JSON: [SET]"
+          else
+            echo "GOOGLE_SERVICE_ACCOUNT_JSON: [NOT SET]"
+          fi

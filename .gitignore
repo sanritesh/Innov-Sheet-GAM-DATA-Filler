@@ -50,6 +50,10 @@ googleadsN.yaml
 *.yaml
 *.yml
 
+# But allow GitHub Actions workflows
+!.github/
+!.github/**
+
 # Logs
 *.log
 logs/
