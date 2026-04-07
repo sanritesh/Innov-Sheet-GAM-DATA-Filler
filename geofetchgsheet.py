@@ -93,9 +93,20 @@ EXCLUDE_PLATFORMS = os.getenv('EXCLUDE_PLATFORMS', 'App').split(',')
 def setup_google_sheets():
     """Setup Google Sheets authentication using environment variables or fallback to file"""
     try:
-        # Try to use service account JSON from environment
+        # Try base64-encoded JSON first (recommended for CI/CD)
+        service_account_json_base64 = os.getenv('GOOGLE_SERVICE_ACCOUNT_JSON_BASE64')
         service_account_json = os.getenv('GOOGLE_SERVICE_ACCOUNT_JSON')
-        if service_account_json:
+        
+        if service_account_json_base64:
+            # Decode base64 and parse JSON
+            import base64
+            service_account_json = base64.b64decode(service_account_json_base64).decode('utf-8')
+            service_account_info = json.loads(service_account_json)
+            credentials = ServiceAccountCredentials.from_json_keyfile_dict(
+                service_account_info, SCOPES
+            )
+            print("Using service account JSON from base64-encoded environment variable")
+        elif service_account_json:
             # Parse JSON and create credentials
             service_account_info = json.loads(service_account_json)
             credentials = ServiceAccountCredentials.from_json_keyfile_dict(
