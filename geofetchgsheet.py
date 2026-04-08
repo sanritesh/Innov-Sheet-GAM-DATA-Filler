@@ -605,7 +605,7 @@ def process_single_order(order, client, order_name, order_id):
         # Get client network code for identification
         client_network = str(getattr(client, 'network_code', 'unknown'))
         # Get line items for this order
-        line_item_service = client.GetService('LineItemService', version='v202411')
+        line_item_service = client.GetService('LineItemService', version='v202602')
         
         statement = ad_manager.StatementBuilder().Where('orderId = :order_id').WithBindVariable('order_id', order_id)
         line_items = line_item_service.getLineItemsByStatement(statement.ToStatement())
@@ -652,7 +652,7 @@ def process_single_order(order, client, order_name, order_id):
                         
                         # Get trafficker and creator names
                         try:
-                            user_service = client.GetService('UserService', version='v202411')
+                            user_service = client.GetService('UserService', version='v202602')
                             if order_info['trafficker_id']:
                                 trafficker_statement = ad_manager.StatementBuilder().Where('id = :user_id').WithBindVariable('user_id', order_info['trafficker_id'])
                                 trafficker_users = user_service.getUsersByStatement(trafficker_statement.ToStatement())
@@ -703,7 +703,7 @@ def fetch_geo_for_search_string(search_string, clients, package_id=None, row_num
         try:
             print(f"[INFO] Processing prioritized client {client_network} first for geo data")
             # Try to find orders containing the search string
-            order_service = client.GetService('OrderService', version='v202411')
+            order_service = client.GetService('OrderService', version='v202602')
             statement = ad_manager.StatementBuilder().Where('name LIKE :search_string').WithBindVariable('search_string', f'%{search_string}%')
             
             response = order_service.getOrdersByStatement(statement.ToStatement())
@@ -746,7 +746,7 @@ def fetch_geo_for_search_string(search_string, clients, package_id=None, row_num
             # If no orders found, try line item search
             print(f"[DEBUG] No orders found containing '{search_string}', trying direct line item search...")
             
-            line_item_service = client.GetService('LineItemService', version='v202411')
+            line_item_service = client.GetService('LineItemService', version='v202602')
             statement = ad_manager.StatementBuilder().Where('name LIKE :search_string').WithBindVariable('search_string', f'%{search_string}%')
             
             response = line_item_service.getLineItemsByStatement(statement.ToStatement())
@@ -784,7 +784,7 @@ def fetch_geo_for_search_string(search_string, clients, package_id=None, row_num
             client_network = str(getattr(client, 'network_code', 'unknown'))
             print(f"[INFO] Processing client {client_network} for order information")
             # Try to find orders containing the search string
-            order_service = client.GetService('OrderService', version='v202411')
+            order_service = client.GetService('OrderService', version='v202602')
             statement = ad_manager.StatementBuilder().Where('name LIKE :search_string').WithBindVariable('search_string', f'%{search_string}%')
             
             response = order_service.getOrdersByStatement(statement.ToStatement())
@@ -826,7 +826,7 @@ def fetch_geo_for_search_string(search_string, clients, package_id=None, row_num
             # If no orders found, try line item search
             print(f"[DEBUG] No orders found containing '{search_string}', trying direct line item search...")
             
-            line_item_service = client.GetService('LineItemService', version='v202411')
+            line_item_service = client.GetService('LineItemService', version='v202602')
             statement = ad_manager.StatementBuilder().Where('name LIKE :search_string').WithBindVariable('search_string', f'%{search_string}%')
             
             response = line_item_service.getLineItemsByStatement(statement.ToStatement())
