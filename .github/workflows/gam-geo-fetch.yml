@@ -14,10 +14,19 @@ on:
   # Allow manual trigger
   workflow_dispatch:
 
-  # Optional: Run on a schedule (e.g., daily at 6 AM UTC)
-  # Uncomment the lines below to enable scheduled runs
-  # schedule:
-  #   - cron: '0 6 * * *'
+  # Schedule: Every 2 hours from 5:00 PM IST to 11:55 PM IST
+  # IST is UTC+5:30, so times in UTC:
+  # 5:00 PM IST = 11:30 UTC
+  # 7:00 PM IST = 13:30 UTC
+  # 9:00 PM IST = 15:30 UTC
+  # 11:00 PM IST = 17:30 UTC
+  # 11:55 PM IST = 18:25 UTC (final run)
+  schedule:
+    - cron: '30 11 * * *'   # 5:00 PM IST
+    - cron: '30 13 * * *'   # 7:00 PM IST
+    - cron: '30 15 * * *'   # 9:00 PM IST
+    - cron: '30 17 * * *'   # 11:00 PM IST
+    - cron: '25 18 * * *'   # 11:55 PM IST
 
 jobs:
   run-gam-script:
