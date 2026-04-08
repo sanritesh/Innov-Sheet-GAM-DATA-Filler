@@ -1288,11 +1288,23 @@ def main():
         return
     
     # Find sheets that need updating
-    sheets_to_update = find_sheets_to_update(sh)
-    if not sheets_to_update:
-        print("[INFO] No sheets need updating. All data appears to be filled.")
-        print("[INFO] This is expected behavior for incremental updates - only missing data will be filled.")
-        return
+    if TARGET_SHEET_NAME:
+        # Use specific target sheet instead of date-based sheets
+        print(f"[INFO] Using target sheet: {TARGET_SHEET_NAME}")
+        try:
+            target_sheet = sh.worksheet(TARGET_SHEET_NAME)
+            sheets_to_update = [target_sheet]
+            print(f"[INFO] Found target sheet '{TARGET_SHEET_NAME}'")
+        except Exception as e:
+            print(f"[ERROR] Could not find sheet '{TARGET_SHEET_NAME}': {e}")
+            return
+    else:
+        # Fall back to date-based sheet detection
+        sheets_to_update = find_sheets_to_update(sh)
+        if not sheets_to_update:
+            print("[INFO] No sheets need updating. All data appears to be filled.")
+            print("[INFO] This is expected behavior for incremental updates - only missing data will be filled.")
+            return
     
     print(f"[INFO] Found {len(sheets_to_update)} sheets that need updating")
     
