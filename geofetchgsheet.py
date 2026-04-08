@@ -74,6 +74,8 @@ def print_pending_notifications():
 # Google Sheets setup
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 SHEET_ID = os.getenv('GOOGLE_SHEET_ID', '1Qx1GhhGUGM_3FWLDM04ygyAezUO2Zf6C4SlhG1h7IQA')
+# Target sheet name - if set, process this specific sheet instead of date-based sheets
+TARGET_SHEET_NAME = os.getenv('TARGET_SHEET_NAME', 'Final_Innov_Details_sorted')
 
 # GAM setup
 GAM_YAMLS = os.getenv('GAM_YAML_FILES', 'googleadsN.yaml,googleads.yaml').split(',')
@@ -383,11 +385,22 @@ if not gc:
 sh = gc.open_by_key(SHEET_ID)
 
 # Find sheets that need updating
-sheets_to_update = find_sheets_to_update(sh)
-
-if not sheets_to_update:
-    print("[INFO] All sheets are already updated. No work needed.")
-    exit(0)
+if TARGET_SHEET_NAME:
+    # Use specific target sheet instead of date-based sheets
+    print(f"[INFO] Using target sheet: {TARGET_SHEET_NAME}")
+    try:
+        target_sheet = sh.worksheet(TARGET_SHEET_NAME)
+        sheets_to_update = [target_sheet]
+        print(f"[INFO] Found target sheet '{TARGET_SHEET_NAME}'")
+    except Exception as e:
+        print(f"[ERROR] Could not find sheet '{TARGET_SHEET_NAME}': {e}")
+        exit(1)
+else:
+    # Fall back to date-based sheet detection
+    sheets_to_update = find_sheets_to_update(sh)
+    if not sheets_to_update:
+        print("[INFO] All sheets are already updated. No work needed.")
+        exit(0)
 
 print(f"[INFO] Found {len(sheets_to_update)} sheets that need updating")
 
