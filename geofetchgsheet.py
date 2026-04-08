@@ -925,14 +925,14 @@ def process_sheet(ws):
     
     campaign_names = [str(row['Campaign Name']).strip() for row in valid_rows]
     
-    # Prepare to update sheet with separate columns for each GAM client
+    # Prepare to update sheet with geo columns
     geo_included_col = 'geo included'
     geo_excluded_col = 'geo excluded'
     
-    # Client (Network 23037861279) columns
-    order_id_col_1 = 'Order ID (23037861279)'
-    order_name_col_1 = 'Order Name (23037861279)'
-    trafficker_col_1 = 'Trafficker (23037861279)'
+    # Client (Network 23037861279) columns - DISABLED for now
+    # order_id_col_1 = 'Order ID (23037861279)'
+    # order_name_col_1 = 'Order Name (23037861279)'
+    # trafficker_col_1 = 'Trafficker (23037861279)'
     
     header = ws.row_values(1)
     
@@ -958,10 +958,10 @@ def process_sheet(ws):
     
     print(f"[INFO] Found {len(empty_cols_after_placement)} empty columns after Placement")
     
-    # Define the columns we need to add
+    # Define the columns we need to add (Order ID, Order Name, Trafficker disabled for now)
     required_columns = [
-        geo_included_col, geo_excluded_col,
-        order_id_col_1, order_name_col_1, trafficker_col_1
+        geo_included_col, geo_excluded_col
+        # order_id_col_1, order_name_col_1, trafficker_col_1
     ]
     
     # Check which columns already exist
@@ -1096,12 +1096,12 @@ def process_sheet(ws):
                 geo_included_idx = existing_columns.get(geo_included_col, -1) + 1
                 geo_excluded_idx = existing_columns.get(geo_excluded_col, -1) + 1
                 
-                # Client columns
-                order_id_idx_1 = existing_columns.get(order_id_col_1, -1) + 1
-                order_name_idx_1 = existing_columns.get(order_name_col_1, -1) + 1
-                trafficker_idx_1 = existing_columns.get(trafficker_col_1, -1) + 1
+                # Client columns - DISABLED for now
+                # order_id_idx_1 = existing_columns.get(order_id_col_1, -1) + 1
+                # order_name_idx_1 = existing_columns.get(order_name_col_1, -1) + 1
+                # trafficker_idx_1 = existing_columns.get(trafficker_col_1, -1) + 1
                 
-                if -1 in [geo_included_idx, geo_excluded_idx, order_id_idx_1, order_name_idx_1, trafficker_idx_1]:
+                if -1 in [geo_included_idx, geo_excluded_idx]:
                     print(f"[ERROR] Some required columns are missing in sheet {ws.title}")
                     continue
                 
@@ -1117,9 +1117,9 @@ def process_sheet(ws):
                 # Prepare values for this order
                 geo_included_str = ', '.join([loc['name'] for loc in order_info.get('geo_included', [])]) if order_info.get('geo_included') else ''
                 geo_excluded_str = ', '.join([loc['name'] for loc in order_info.get('geo_excluded', [])]) if order_info.get('geo_excluded') else ''
-                order_id_str = str(order_info.get('order_id', '')) if order_info else ''
-                order_name_str = order_info.get('order_name', '') if order_info else ''
-                trafficker_str = order_info.get('trafficker_name', '') if order_info else ''
+                # order_id_str = str(order_info.get('order_id', '')) if order_info else ''
+                # order_name_str = order_info.get('order_name', '') if order_info else ''
+                # trafficker_str = order_info.get('trafficker_name', '') if order_info else ''
                 
                 # Collect updates for geo data
                 if geo_included_str:
@@ -1127,15 +1127,15 @@ def process_sheet(ws):
                 if geo_excluded_str:
                     all_cell_updates.append(gspread.Cell(current_row, geo_excluded_idx, geo_excluded_str))
                 
-                # Update order columns
-                if order_id_str:
-                    all_cell_updates.append(gspread.Cell(current_row, order_id_idx_1, order_id_str))
-                if order_name_str:
-                    all_cell_updates.append(gspread.Cell(current_row, order_name_idx_1, order_name_str))
-                if trafficker_str:
-                    all_cell_updates.append(gspread.Cell(current_row, trafficker_idx_1, trafficker_str))
+                # Update order columns - DISABLED for now
+                # if order_id_str:
+                #     all_cell_updates.append(gspread.Cell(current_row, order_id_idx_1, order_id_str))
+                # if order_name_str:
+                #     all_cell_updates.append(gspread.Cell(current_row, order_name_idx_1, order_name_str))
+                # if trafficker_str:
+                #     all_cell_updates.append(gspread.Cell(current_row, trafficker_idx_1, trafficker_str))
                 
-                print(f"[INFO] Prepared updates for row {current_row} with order: {order_name_str}, geo included: {geo_included_str}, geo excluded: {geo_excluded_str}, order ID: {order_id_str}, trafficker: {trafficker_str}")
+                print(f"[INFO] Prepared updates for row {current_row} with geo included: {geo_included_str}, geo excluded: {geo_excluded_str}")
                 
                 # Batch update all cells for this campaign
                 if all_cell_updates:
