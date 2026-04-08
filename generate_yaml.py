@@ -48,10 +48,9 @@ def main():
         print("   Using existing YAML files if available")
         return
     
-    # Generate YAML files
+    # Generate YAML file for network 23037861279
     success = True
     success &= generate_yaml_from_template('googleadsN.yaml.template', 'googleadsN.yaml')
-    success &= generate_yaml_from_template('googleads.yaml.template', 'googleads.yaml')
     
     if success:
         print("✅ All YAML files generated successfully!")

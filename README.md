@@ -34,14 +34,9 @@ This project provides a Python script to fetch geo-targeting information from Go
 
 3. **Set up GAM API credentials**
    
-   Create `googleads.yaml` and `googleadsN.yaml` files with your GAM API credentials:
+   Create `googleadsN.yaml` file with your GAM API credentials:
    
    ```yaml
-   # googleads.yaml
-   network_code: 7176
-   application_name: YourAppName
-   path_to_private_key_file: path/to/your/private-key.json
-   
    # googleadsN.yaml  
    network_code: 23037861279
    application_name: YourAppName
@@ -62,7 +57,7 @@ You can set these environment variables for configuration:
 ```bash
 export GOOGLE_SHEET_ID="your-sheet-id"
 export GOOGLE_SHEET_NAME="your-sheet-name"
-export GAM_NETWORK_CODES="7176,23037861279"
+export GAM_NETWORK_CODES="23037861279"
 ```
 
 ### Script Configuration
@@ -217,7 +212,7 @@ This project uses GitHub Actions for automated execution. The workflow runs on:
    | Variable Name | Description | Example |
    |---------------|-------------|---------|
    | `GOOGLE_SHEET_ID` | Target Google Sheet ID | `1Qx1GhhGUGM_3FWLDM04ygyAezUO2Zf6C4SlhG1h7IQA` |
-   | `GAM_NETWORK_CODES` | Comma-separated GAM network codes | `7176,23037861279` |
+   | `GAM_NETWORK_CODES` | GAM network code | `23037861279` |
    | `EXCLUDE_SUBSTRINGS` | Substrings to exclude | `ETCIO,ETBRANDEQUITY` |
    | `EXCLUDE_PLATFORMS` | Platforms to exclude | `App` |
 

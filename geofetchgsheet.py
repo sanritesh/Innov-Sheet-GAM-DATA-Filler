@@ -5,17 +5,13 @@ This script fetches geo targeting information from Google Ad Manager (GAM) and u
 
 DUPLICATE ROW PREVENTION:
 - FIXED: Script now keeps ONE row per campaign instead of creating multiple rows
-- Data from BOTH GAM clients is preserved and merged into the same row
-- Both client networks (23037861279 and 7176) order information is filled in the same row
-- Eliminates duplicate campaign rows while maintaining data from all GAM clients
+- Eliminates duplicate campaign rows while maintaining data from GAM client
 
 COLUMN STRUCTURE:
 - Client 23037861279: Order ID, Order Name, Trafficker (Creator removed)
-- Client 7176: Order ID, Order Name (Trafficker and Creator removed)
 
 GEO DATA PRIORITY:
-- Geo data (geo included/excluded) is ALWAYS fetched from client 23037861279 first
-- Other clients are only used for order information if client 23037861279 doesn't have geo data
+- Geo data (geo included/excluded) is fetched from client 23037861279
 - Ensures consistent geo targeting information from primary GAM account
 
 Author: Ritesh Sanjay
@@ -78,7 +74,7 @@ SHEET_ID = os.getenv('GOOGLE_SHEET_ID', '1Qx1GhhGUGM_3FWLDM04ygyAezUO2Zf6C4SlhG1
 TARGET_SHEET_NAME = os.getenv('TARGET_SHEET_NAME', 'Final_Innov_Details_sorted')
 
 # GAM setup
-GAM_YAMLS = os.getenv('GAM_YAML_FILES', 'googleadsN.yaml,googleads.yaml').split(',')
+GAM_YAMLS = os.getenv('GAM_YAML_FILES', 'googleadsN.yaml').split(',')
 
 # Exclusion list for Package Name (case-insensitive)
 DEFAULT_EXCLUDE_SUBSTRINGS = [
@@ -933,16 +929,10 @@ def process_sheet(ws):
     geo_included_col = 'geo included'
     geo_excluded_col = 'geo excluded'
     
-    # Client 1 (Network 23037861279) columns
+    # Client (Network 23037861279) columns
     order_id_col_1 = 'Order ID (23037861279)'
     order_name_col_1 = 'Order Name (23037861279)'
     trafficker_col_1 = 'Trafficker (23037861279)'
-    # Note: Creator column removed for client 23037861279
-    
-    # Client 2 (Network 7176) columns
-    order_id_col_2 = 'Order ID (7176)'
-    order_name_col_2 = 'Order Name (7176)'
-    # Note: Trafficker and Creator columns removed for client 7176
     
     header = ws.row_values(1)
     
@@ -971,8 +961,7 @@ def process_sheet(ws):
     # Define the columns we need to add
     required_columns = [
         geo_included_col, geo_excluded_col,
-        order_id_col_1, order_name_col_1, trafficker_col_1,
-        order_id_col_2, order_name_col_2
+        order_id_col_1, order_name_col_1, trafficker_col_1
     ]
     
     # Check which columns already exist
@@ -1107,81 +1096,46 @@ def process_sheet(ws):
                 geo_included_idx = existing_columns.get(geo_included_col, -1) + 1
                 geo_excluded_idx = existing_columns.get(geo_excluded_col, -1) + 1
                 
-                # Check if all required columns exist
-                geo_included_idx = existing_columns.get(geo_included_col, -1) + 1
-                geo_excluded_idx = existing_columns.get(geo_excluded_col, -1) + 1
-                
-                # Client 1 columns
+                # Client columns
                 order_id_idx_1 = existing_columns.get(order_id_col_1, -1) + 1
                 order_name_idx_1 = existing_columns.get(order_name_col_1, -1) + 1
                 trafficker_idx_1 = existing_columns.get(trafficker_col_1, -1) + 1
-                # Note: Creator column removed for client 23037861279
                 
-                # Client 2 columns
-                order_id_idx_2 = existing_columns.get(order_id_col_2, -1) + 1
-                order_name_idx_2 = existing_columns.get(order_name_col_2, -1) + 1
-                # Note: Trafficker and Creator columns removed for client 7176
-                
-                if -1 in [geo_included_idx, geo_excluded_idx, order_id_idx_1, order_name_idx_1, trafficker_idx_1, order_id_idx_2, order_name_idx_2]:
+                if -1 in [geo_included_idx, geo_excluded_idx, order_id_idx_1, order_name_idx_1, trafficker_idx_1]:
                     print(f"[ERROR] Some required columns are missing in sheet {ws.title}")
                     continue
                 
                 # Collect all updates for this sheet to batch them
                 all_cell_updates = []
                 
-                # Process each order found - FIXED: Keep one row per campaign, fill both client columns
+                # Process each order found - keep one row per campaign
                 current_row = i  # Always use the same row for all orders of the same campaign
                 
-                # MERGE CLIENT DATA: Keep data from both GAM clients but prevent duplicate rows
-                # Group orders by client network to merge information from both clients
-                client_orders = {}
-                for order_info in all_orders_info:
-                    client_network = order_info.get('client_network', 'unknown')
-                    if client_network not in client_orders:
-                        client_orders[client_network] = order_info
-                    else:
-                        # If multiple orders for same client, keep the first one
-                        print(f"[INFO] Multiple orders found for client {client_network}, keeping first one")
+                # Use the first order info (from client 23037861279)
+                order_info = all_orders_info[0] if all_orders_info else {}
                 
-                print(f"[INFO] Campaign '{campaign_name}' has {len(all_orders_info)} total orders from {len(client_orders)} GAM clients")
-                print(f"[INFO] GAM Clients found: {list(client_orders.keys())}")
+                # Prepare values for this order
+                geo_included_str = ', '.join([loc['name'] for loc in order_info.get('geo_included', [])]) if order_info.get('geo_included') else ''
+                geo_excluded_str = ', '.join([loc['name'] for loc in order_info.get('geo_excluded', [])]) if order_info.get('geo_excluded') else ''
+                order_id_str = str(order_info.get('order_id', '')) if order_info else ''
+                order_name_str = order_info.get('order_name', '') if order_info else ''
+                trafficker_str = order_info.get('trafficker_name', '') if order_info else ''
                 
-                # Process orders from all GAM clients to fill both client columns in the same row
-                for order_idx, (client_network, order_info) in enumerate(client_orders.items()):
-                    # Prepare values for this order
-                    geo_included_str = ', '.join([loc['name'] for loc in order_info.get('geo_included', [])]) if order_info.get('geo_included') else ''
-                    geo_excluded_str = ', '.join([loc['name'] for loc in order_info.get('geo_excluded', [])]) if order_info.get('geo_excluded') else ''
-                    order_id_str = str(order_info.get('order_id', '')) if order_info else ''
-                    order_name_str = order_info.get('order_name', '') if order_info else ''
-                    trafficker_str = order_info.get('trafficker_name', '') if order_info else ''
-                    creator_str = order_info.get('creator_name', '') if order_info else ''
-                    # client_network is already available from the loop iteration
-                    
-                    # Collect updates for this order based on client network
-                    if geo_included_str:
-                        all_cell_updates.append(gspread.Cell(current_row, geo_included_idx, geo_included_str))
-                    if geo_excluded_str:
-                        all_cell_updates.append(gspread.Cell(current_row, geo_excluded_idx, geo_excluded_str))
-                    
-                    # Use appropriate columns based on client network
-                    if client_network == '23037861279':  # Client 1
-                        if order_id_str:
-                            all_cell_updates.append(gspread.Cell(current_row, order_id_idx_1, order_id_str))
-                        if order_name_str:
-                            all_cell_updates.append(gspread.Cell(current_row, order_name_idx_1, order_name_str))
-                        if trafficker_str:
-                            all_cell_updates.append(gspread.Cell(current_row, trafficker_idx_1, trafficker_str))
-                        # Note: Creator column removed for client 23037861279
-                    elif client_network == '7176':  # Client 2
-                        if order_id_str:
-                            all_cell_updates.append(gspread.Cell(current_row, order_id_idx_2, order_id_str))
-                        if order_name_str:
-                            all_cell_updates.append(gspread.Cell(current_row, order_name_idx_2, order_name_str))
-                        # Note: Trafficker and Creator columns removed for client 7176
-                    else:
-                        print(f"[WARNING] Unknown client network: {client_network}")
-                    
-                    print(f"[INFO] Prepared updates for row {current_row} with order: {order_name_str} (Client: {client_network}), geo included: {geo_included_str}, geo excluded: {geo_excluded_str}, order ID: {order_id_str}, trafficker: {trafficker_str}")
+                # Collect updates for geo data
+                if geo_included_str:
+                    all_cell_updates.append(gspread.Cell(current_row, geo_included_idx, geo_included_str))
+                if geo_excluded_str:
+                    all_cell_updates.append(gspread.Cell(current_row, geo_excluded_idx, geo_excluded_str))
+                
+                # Update order columns
+                if order_id_str:
+                    all_cell_updates.append(gspread.Cell(current_row, order_id_idx_1, order_id_str))
+                if order_name_str:
+                    all_cell_updates.append(gspread.Cell(current_row, order_name_idx_1, order_name_str))
+                if trafficker_str:
+                    all_cell_updates.append(gspread.Cell(current_row, trafficker_idx_1, trafficker_str))
+                
+                print(f"[INFO] Prepared updates for row {current_row} with order: {order_name_str}, geo included: {geo_included_str}, geo excluded: {geo_excluded_str}, order ID: {order_id_str}, trafficker: {trafficker_str}")
                 
                 # Batch update all cells for this campaign
                 if all_cell_updates:
