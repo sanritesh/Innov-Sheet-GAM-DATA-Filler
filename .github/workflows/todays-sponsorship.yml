@@ -61,3 +61,27 @@ jobs:
           name: sponsorship-details-${{ github.run_number }}
           path: output/sponsorship_details.json
           retention-days: 30
+
+      - name: Send Email with Report
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_SERVER }}
+          server_port: ${{ secrets.SMTP_PORT }}
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          subject: "Today's Sponsorship Details - ${{ github.run_number }}"
+          to: subhashish.singh@timesinternet.in
+          from: ${{ secrets.SMTP_FROM_EMAIL }}
+          body: |
+            Hi,
+
+            Please find attached the Today's Sponsorship Details report.
+
+            Generated at: ${{ github.event.repository.updated_at }}
+            Run Number: ${{ github.run_number }}
+            
+            This is an automated email from GitHub Actions.
+            
+            Regards,
+            GAM Automation
+          attachments: output/sponsorship_details.json
