@@ -83,5 +83,5 @@ jobs:
             This is an automated email from GitHub Actions.
             
             Regards,
-            GAM Automation
+            Ritesh
           attachments: output/sponsorship_details.json
