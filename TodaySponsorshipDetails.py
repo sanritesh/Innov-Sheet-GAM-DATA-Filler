@@ -165,7 +165,7 @@ async def get_todays_sponsorships(client):
     return results
 
 
-async def run_cli():
+async def run_cli(json_output_file=None):
     """Run the script in CLI mode (for GitHub Actions)."""
     print("=" * 60)
     print("Today's Sponsorship Details")
@@ -181,39 +181,57 @@ async def run_cli():
         
         data = await get_todays_sponsorships(client)
         
+        # Prepare output structure
+        output = {
+            "generated_at": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            "generated_by": "GAM Sponsorship Details Script",
+            "total_items": 0,
+            "data": [],
+            "status": "success"
+        }
+        
         if isinstance(data, dict) and 'error' in data:
             print(f"[ERROR] {data['error']}")
-            return
-        
-        if not data:
+            output["status"] = "error"
+            output["error"] = data['error']
+        elif not data:
             print("[INFO] No sponsorship line items found for today.")
-            return
-        
-        print(f"[INFO] Found {len(data)} sponsorship line items for today:")
-        print()
-        
-        for item in data:
-            if 'error' in item:
-                print(f"  [ERROR] {item['error']}")
-                continue
+            output["data"] = []
+        else:
+            output["data"] = data
+            output["total_items"] = len(data)
             
-            print(f"  ID: {item['id']}")
-            print(f"  Name: {item['name']}")
-            print(f"  Status: {item['status']}")
-            print(f"  Start: {item['startDateTime']}")
-            print(f"  End: {item['endDateTime']}")
-            
-            if item.get('targeting', {}).get('inventoryTargeting'):
-                print("  Targeted Ad Units:")
-                for ad_unit in item['targeting']['inventoryTargeting']:
-                    print(f"    - {ad_unit['AdunitName']} (ID: {ad_unit['adUnitId']})")
+            print(f"[INFO] Found {len(data)} sponsorship line items for today:")
             print()
+            
+            for item in data:
+                if 'error' in item:
+                    print(f"  [ERROR] {item['error']}")
+                    continue
+                
+                print(f"  ID: {item['id']}")
+                print(f"  Name: {item['name']}")
+                print(f"  Status: {item['status']}")
+                print(f"  Start: {item['startDateTime']}")
+                print(f"  End: {item['endDateTime']}")
+                
+                if item.get('targeting', {}).get('inventoryTargeting'):
+                    print("  Targeted Ad Units:")
+                    for ad_unit in item['targeting']['inventoryTargeting']:
+                        print(f"    - {ad_unit['AdunitName']} (ID: {ad_unit['adUnitId']})")
+                print()
         
-        # Also output as JSON for parsing
+        # Save to JSON file if specified
+        if json_output_file:
+            with open(json_output_file, 'w') as f:
+                json.dump(output, f, indent=2)
+            print(f"[INFO] JSON output saved to: {json_output_file}")
+        
+        # Also print JSON to console
         print("=" * 60)
         print("JSON Output:")
         print("=" * 60)
-        print(json.dumps({"data": data, "status": "success"}, indent=2))
+        print(json.dumps(output, indent=2))
         
     except Exception as e:
         print(f"[ERROR] {str(e)}")
@@ -237,7 +255,13 @@ if app is not None:
 if __name__ == '__main__':
     if '--cli' in sys.argv:
         # CLI mode for GitHub Actions
-        asyncio.run(run_cli())
+        # Check for --json-output argument
+        json_output_file = None
+        for i, arg in enumerate(sys.argv):
+            if arg == '--json-output' and i + 1 < len(sys.argv):
+                json_output_file = sys.argv[i + 1]
+                break
+        asyncio.run(run_cli(json_output_file))
     elif app is not None:
         # Web server mode
         app.run(host='0.0.0.0', port=5000)

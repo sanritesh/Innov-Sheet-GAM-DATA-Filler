@@ -34,4 +34,14 @@ jobs:
       - name: Run Today's Sponsorship Details
         env:
           GAM_YAML_FILE: googleadsN.yaml
-        run: python TodaySponsorshipDetails.py --cli
+        run: |
+          mkdir -p output
+          python TodaySponsorshipDetails.py --cli --json-output output/sponsorship_details.json
+          echo "JSON output saved to output/sponsorship_details.json"
+
+      - name: Upload Sponsorship Details JSON
+        uses: actions/upload-artifact@v4
+        with:
+          name: sponsorship-details-${{ github.run_number }}
+          path: output/sponsorship_details.json
+          retention-days: 30
