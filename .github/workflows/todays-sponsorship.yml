@@ -1,8 +1,24 @@
 name: Today's Sponsorship Details
 
 on:
-  # Allow manual trigger only
+  # Allow manual trigger
   workflow_dispatch:
+
+  # Schedule: Daily at 00:04 IST and every 4 hours
+  # IST is UTC+5:30, so times in UTC:
+  # 00:04 IST = 18:34 UTC (previous day)
+  # 04:04 IST = 22:34 UTC (previous day)
+  # 08:04 IST = 02:34 UTC
+  # 12:04 IST = 06:34 UTC
+  # 16:04 IST = 10:34 UTC
+  # 20:04 IST = 14:34 UTC
+  schedule:
+    - cron: '34 18 * * *'   # 00:04 IST
+    - cron: '34 22 * * *'   # 04:04 IST
+    - cron: '34 2 * * *'    # 08:04 IST
+    - cron: '34 6 * * *'    # 12:04 IST
+    - cron: '34 10 * * *'   # 16:04 IST
+    - cron: '34 14 * * *'   # 20:04 IST
 
 jobs:
   run-sponsorship-details:
