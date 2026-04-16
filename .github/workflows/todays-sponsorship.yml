@@ -1,0 +1,37 @@
+name: Today's Sponsorship Details
+
+on:
+  # Allow manual trigger only
+  workflow_dispatch:
+
+jobs:
+  run-sponsorship-details:
+    name: Fetch Today's Sponsorship Details
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.9
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          echo "Dependencies installed successfully"
+
+      - name: Generate YAML configuration files
+        env:
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+        run: python generate_yaml.py
+
+      - name: Run Today's Sponsorship Details
+        env:
+          GAM_YAML_FILE: googleadsN.yaml
+        run: python TodaySponsorshipDetails.py --cli
