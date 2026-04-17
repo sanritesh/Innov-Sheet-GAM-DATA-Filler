@@ -43,7 +43,7 @@ async def fetch_ad_unit_names_in_batches(client, ad_unit_ids):
 
     # Function to fetch names for each batch
     async def fetch_batch(batch):
-        ad_unit_service = client.GetService('InventoryService')
+        ad_unit_service = client.GetService('InventoryService', version='v202602')
         statement = (ad_manager.StatementBuilder()
                      .Where('id IN ({})'.format(', '.join([str(aid) for aid in batch]))))
 
